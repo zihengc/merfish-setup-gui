@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS / Google Drive
+.DS_Store
+Icon?
+*.gdoc
+*.gsheet
+
+# Colleagues' own files stay local (their parameters are built into the presets)
+reference/
