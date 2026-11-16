@@ -19,9 +19,9 @@ import merfish_setup_gui as M  # noqa: E402
 
 HAL = os.path.join(REPO, "lab_files", "hal")
 KILROY = os.path.join(REPO, "lab_files", "kilroy", "kilroy_protocol_MERFISH_lab.xml")
-# Optional: a colleague's files kept locally (not in the repo)
+DAVE = os.path.join(REPO, "lab_files", "dave")
+# Optional: the U2OS hyb original folder, kept locally (not in the repo); only his Kilroy file is tested from it
 U2OS_HYB = os.path.join(REPO, "reference")
-DERIVED = ("film/filename", "film/frames", "illumination/shutters", "focuslock/hardware_z_scan/z_offsets")
 
 
 def norm(el):
@@ -88,26 +88,19 @@ class SettingsTests(unittest.TestCase):
                 z = M.parse_float_list(M.sget(root, "focuslock/hardware_z_scan/z_offsets"))
                 self.assertIsNotNone(M.infer_z_params(steps, z))
 
-    def test_lab_presets_reproduce_lab_files(self):
-        lab = [p for p in M.SETTINGS_PRESETS if p["group"] == "Lab"]
-        self.assertEqual(len(lab), len(settings_files(HAL)))
-        for p in lab:
+    def test_presets_reproduce_files(self):
+        names = {p["name"] for p in M.SETTINGS_PRESETS}
+        self.assertEqual(names, {os.path.basename(f)[:-4] for f in settings_files(HAL)},
+                         "every settings file in lab_files/hal should have a preset, and vice versa")
+        for p in M.SETTINGS_PRESETS:
             with self.subTest(p["name"]):
                 root, steps = build_preset_settings(p)
                 orig = ET.parse(os.path.join(HAL, p["name"] + ".xml")).getroot()
+                if p["group"] == "U2OS hyb":  # his film/filename is out of date; the preset corrects it
+                    M.sset(orig, "film/filename", M.sget(root, "film/filename"))
                 self.assertEqual(norm(root), norm(orig))
                 sh = ET.parse(os.path.join(HAL, M.shutters_filename(steps))).getroot()
                 self.assertEqual(norm(ET.fromstring(M.shutters_to_string(steps))), norm(sh))
-
-    @unittest.skipUnless(os.path.isdir(U2OS_HYB), "reference/ folder not present")
-    def test_u2os_hyb_presets_reproduce_his_files(self):
-        for p in [p for p in M.SETTINGS_PRESETS if p["group"] == "U2OS hyb"]:
-            with self.subTest(p["name"]):
-                root, _ = build_preset_settings(p)
-                orig = ET.parse(os.path.join(U2OS_HYB, p["name"] + ".xml")).getroot()
-                for path in DERIVED[:1]:  # his film/filename is out of date; the preset corrects it
-                    M.sset(orig, path, M.sget(root, path))
-                self.assertEqual(norm(root), norm(orig))
 
 
 class KilroyTests(unittest.TestCase):
@@ -152,11 +145,21 @@ class DaveTests(unittest.TestCase):
         probs = d.validate(M.KilroyConfig.load(KILROY), lambda name: 19)
         self.assertTrue(any("Hybridize 15" in p and "Hybridize 16" in p for p in probs))
 
-    @unittest.skipUnless(os.path.isdir(U2OS_HYB), "reference/ folder not present")
-    def test_u2os_hyb_recipe_file(self):
-        path = os.path.join(U2OS_HYB, "dave_recipe_U2OS_1round+14rounds.xml")
-        d = M.DaveRecipe.load(path)
-        self.assertEqual(norm(ET.fromstring(d.to_string())), norm(ET.parse(path).getroot()))
+    def test_recipe_files(self):
+        files = glob.glob(os.path.join(DAVE, "*.xml"))
+        self.assertTrue(files)
+        for path in files:
+            with self.subTest(os.path.basename(path)):
+                d = M.DaveRecipe.load(path)
+                self.assertEqual(norm(ET.fromstring(d.to_string())), norm(ET.parse(path).getroot()))
+                for st in d.stages:  # every stage's settings is in lab_files/hal with a matching frame count
+                    settings = os.path.join(HAL, st["params"] + ".xml")
+                    self.assertTrue(os.path.exists(settings), st["params"])
+                    frames = M.sget(ET.parse(settings).getroot(), "film/frames")
+                    self.assertEqual(st["length"], frames, st["params"])
+
+    def test_u2os_hyb_preset_matches_file(self):
+        d = M.DaveRecipe.load(os.path.join(DAVE, "dave_recipe_U2OS_1round+14rounds.xml"))
         self.assertEqual(vars(d), vars(M.dave_preset_u2os_hyb()))
 
 

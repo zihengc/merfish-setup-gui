@@ -27,7 +27,15 @@ REPO_DIR = os.path.dirname(APP_DIR)
 # Where the lab files live in the repo (falls back to the app folder)
 LAB_HAL_DIR = os.path.join(REPO_DIR, "lab_files", "hal")
 LAB_KILROY_DIR = os.path.join(REPO_DIR, "lab_files", "kilroy")
+LAB_DAVE_DIR = os.path.join(REPO_DIR, "lab_files", "dave")
 DEFAULT_KILROY_NAME = "kilroy_protocol_MERFISH_lab.xml"
+
+
+def dialog_dir(current_file, lab_dir, fallback):
+    """Start folder for a file dialog: the current file's folder, else the lab folder, else fallback."""
+    if current_file and os.path.isdir(os.path.dirname(current_file)):
+        return os.path.dirname(current_file)
+    return lab_dir if os.path.isdir(lab_dir) else fallback
 
 
 def settings_search_dirs(*extra):
@@ -1838,7 +1846,8 @@ class App(tk.Tk):
         self.refresh_dave(0)
 
     def open_dave(self):
-        path = filedialog.askopenfilename(initialdir=self.last_dir, title="Open Dave recipe",
+        path = filedialog.askopenfilename(initialdir=dialog_dir(self.dave_path, LAB_DAVE_DIR, self.last_dir),
+                                          title="Open Dave recipe",
                                           filetypes=[("XML", "*.xml"), ("All", "*.*")])
         if path:
             self.load_dave(path)
@@ -1872,7 +1881,8 @@ class App(tk.Tk):
 
     def save_dave_as(self):
         init = os.path.basename(self.dave_path) if self.dave_path else "dave_recipe.xml"
-        path = filedialog.asksaveasfilename(initialdir=self.last_dir, initialfile=init,
+        path = filedialog.asksaveasfilename(initialdir=dialog_dir(self.dave_path, LAB_DAVE_DIR, self.last_dir),
+                                            initialfile=init,
                                             defaultextension=".xml", filetypes=[("XML", "*.xml")])
         if path:
             self._write_dave(path)
@@ -2458,7 +2468,8 @@ class App(tk.Tk):
 
     # ================================================================ tab 4 logic
     def open_kilroy(self):
-        path = filedialog.askopenfilename(initialdir=self.last_dir, title="Open Kilroy protocol file",
+        path = filedialog.askopenfilename(initialdir=dialog_dir(self.kilroy_path, LAB_KILROY_DIR, self.last_dir),
+                                          title="Open Kilroy protocol file",
                                           filetypes=[("XML", "*.xml"), ("All", "*.*")])
         if path:
             self.load_kilroy(path)
@@ -2502,7 +2513,8 @@ class App(tk.Tk):
     def save_kilroy_as(self):
         init = (os.path.basename(self.kilroy_path) if self.kilroy_path
                 else getattr(self, "kilroy_suggest", None) or "kilroy_protocol.xml")
-        path = filedialog.asksaveasfilename(initialdir=self.last_dir, initialfile=init,
+        path = filedialog.asksaveasfilename(initialdir=dialog_dir(self.kilroy_path, LAB_KILROY_DIR, self.last_dir),
+                                            initialfile=init,
                                             defaultextension=".xml", filetypes=[("XML", "*.xml")])
         if path:
             self._write_kilroy(path)
