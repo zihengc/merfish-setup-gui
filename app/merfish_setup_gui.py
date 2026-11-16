@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MERFISH 显微镜参数设置工具 (MERFISH microscope setup GUI)
+MERFISH microscope setup GUI
 
-编辑 / 生成四类文件:
-  1. HAL shutters 序列文件   e.g. 405f1_750f10_650f10_560f10_405f10_shutters_1cam.xml
-  2. HAL settings 参数文件   e.g. Epi-405s1-750s10-650s10-560s10-405s10-U2OS.xml
-  3. Kilroy 流控协议文件     e.g. kilroy_protocol_MERFISH_lab.xml
-  4. Dave 自动化流程文件     e.g. dave_recipe_U2OS_1round+14rounds.xml
+Edits / generates four kinds of files:
+  1. HAL shutters sequence  e.g. 405f1_750f10_650f10_560f10_405f10_shutters_1cam.xml
+  2. HAL settings file       e.g. Epi-405s1-750s10-650s10-560s10-405s10-U2OS.xml
+  3. Kilroy fluidics file    e.g. kilroy_protocol_MERFISH_lab.xml
+  4. Dave automation recipe  e.g. dave_recipe_U2OS_1round+14rounds.xml
 
-只依赖 Python 标准库 (tkinter)，Windows / macOS / Linux 均可运行:
-    python merfish_setup_gui.py
+Uses only the Python standard library (tkinter); runs on Windows / macOS / Linux:
+    python app/merfish_setup_gui.py
 """
 
 import copy
@@ -23,10 +23,24 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from xml.sax.saxutils import escape, quoteattr
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.dirname(APP_DIR)
+# Where the lab files live in the repo (falls back to the app folder)
+LAB_HAL_DIR = os.path.join(REPO_DIR, "lab_files", "hal")
+LAB_KILROY_DIR = os.path.join(REPO_DIR, "lab_files", "kilroy")
+DEFAULT_KILROY_NAME = "kilroy_protocol_MERFISH_lab.xml"
+
+
+def settings_search_dirs(*extra):
+    """Folders to search for settings files (unique, in order)."""
+    out = []
+    for d in list(extra) + [LAB_HAL_DIR, APP_DIR]:
+        if d and d not in out and os.path.isdir(d):
+            out.append(d)
+    return out
 
 # ----------------------------------------------------------------------------
-# 激光通道配置: (HAL channel 编号, 波长, 预览颜色)
-# 如果显微镜的通道顺序不同，只需改这里。
+# Laser channels: (HAL channel index, wavelength, preview color)
+# If a microscope uses a different channel order, change it here only.
 # ----------------------------------------------------------------------------
 LASERS = [
     (0, "750", "#7f1d1d"),
@@ -43,17 +57,17 @@ N_CHANNELS = len(LASERS)
 XML_HEADER = '<?xml version="1.0" encoding="ISO-8859-1"?>'
 
 SEQUENCE_PRESETS = {
-    "Fiducial + 5色 z-stack (405f1 750/650/560/488/405 f10)":
+    "Fiducial + 5-color z-stack (405f1 750/650/560/488/405 f10)":
         [("405", 1), ("750", 10), ("650", 10), ("560", 10), ("488", 10), ("405", 10)],
-    "Fiducial + 4色 z-stack (405f1 750/650/560/405 f10)":
+    "Fiducial + 4-color z-stack (405f1 750/650/560/405 f10)":
         [("405", 1), ("750", 10), ("650", 10), ("560", 10), ("405", 10)],
-    "4色 z-stack (650/560/488/405 f10)":
+    "4-color z-stack (650/560/488/405 f10)":
         [("650", 10), ("560", 10), ("488", 10), ("405", 10)],
-    "5色单帧 (750/650/560/488/405 f1)":
+    "5-color single frame (750/650/560/488/405 f1)":
         [("750", 1), ("650", 1), ("560", 1), ("488", 1), ("405", 1)],
 }
 
-# 内置默认 settings 模板 (来自 Dsk-650s10-560s10-488s10-405s10-U2OS.xml)
+# Built-in default settings template (from Dsk-650s10-560s10-488s10-405s10-U2OS.xml)
 DEFAULT_SETTINGS_XML = """<?xml version="1.0" encoding="ISO-8859-1"?>
 <settings>
   <camera1 validate="True">
@@ -168,10 +182,10 @@ DEFAULT_SETTINGS_XML = """<?xml version="1.0" encoding="ISO-8859-1"?>
 
 
 # ============================================================================
-# 通用工具
+# Utilities
 # ============================================================================
 def fmt_num(v, decimals=6):
-    """数字 -> 简洁字符串 (2.4000000000000004 -> '2.4', 4.0 -> '4')."""
+    """Number -> compact string (2.4000000000000004 -> '2.4', 4.0 -> '4')."""
     s = f"{round(float(v), decimals):.{decimals}f}".rstrip("0").rstrip(".")
     return "0" if s in ("", "-0") else s
 
@@ -184,7 +198,7 @@ def fmt_duration(sec):
 
 
 def write_text_crlf(path, text):
-    """按 HAL / Kilroy 原文件格式写出: ISO-8859-1 编码, Windows 换行."""
+    """Write in the original HAL / Kilroy format: ISO-8859-1 encoding, Windows line endings."""
     with open(path, "w", encoding="iso-8859-1", errors="xmlcharrefreplace", newline="\r\n") as f:
         f.write(text)
 
@@ -199,7 +213,7 @@ def parse_float_list(text):
 
 
 # ============================================================================
-# Shutters 序列 (model)
+# Shutters sequence (model)
 # ============================================================================
 def new_step(wl, frames, power=1.0, color="255,255,255"):
     return {"channel": WL2CH[wl], "frames": int(frames), "power": float(power), "color": color}
@@ -222,7 +236,7 @@ def sequence_tokens(steps, letter="s"):
 def parse_shutters(path):
     root = ET.parse(path).getroot()
     if root.tag != "repeat":
-        raise ValueError(f"不是 shutters 文件 (根节点是 <{root.tag}>，应为 <repeat>)")
+        raise ValueError(f"Not a shutters file (root element is <{root.tag}>, expected <repeat>)")
     overs = int(float(root.findtext("oversampling", "1")))
     events = []
     for ev in root.findall("event"):
@@ -239,16 +253,16 @@ def parse_shutters(path):
     t = 0.0
     for e in events:
         if abs(e["on"] - t) > 1e-6:
-            warnings.append(f"通道 {e['channel']} 的 on={e['on']} 与上一事件不连续 (预期 {t})")
+            warnings.append(f"Channel {e['channel']}: on={e['on']} does not follow the previous event (expected {t})")
         n = e["off"] - e["on"]
         if abs(n - round(n)) > 1e-6:
-            warnings.append(f"通道 {e['channel']} 的帧数 {n} 不是整数，已四舍五入")
+            warnings.append(f"Channel {e['channel']}: {n} frames is not an integer, rounded")
         steps.append({"channel": e["channel"], "frames": max(1, int(round(n))),
                       "power": e["power"], "color": e["color"]})
         t = e["off"]
     file_frames = int(float(root.findtext("frames", "0")))
     if file_frames != total_frames(steps):
-        warnings.append(f"文件中 <frames>={file_frames}，但事件总帧数={total_frames(steps)}")
+        warnings.append(f"File says <frames>={file_frames}, but the events add up to {total_frames(steps)} frames")
     return overs, steps, warnings
 
 
@@ -270,11 +284,11 @@ def shutters_to_string(steps, oversampling=1):
     return "\n".join(lines) + "\n"
 
 
-Z_MODES = ["往返 serpentine", "每次从下往上 always up", "不扫 Z (全部为起点)"]
+Z_MODES = ["Serpentine (up, down, …)", "Always bottom-up", "No Z scan (all at start)"]
 
 
 def make_z_groups(steps, z_start, z_step, mode):
-    """返回每个 step 对应的 z 列表。单帧 step (如 405 fiducial) 固定在 z 起点。"""
+    """Return the list of z values for each step. Single-frame steps (e.g. 405 fiducial) stay at z start."""
     groups = []
     up = True
     for s in steps:
@@ -292,7 +306,7 @@ def make_z_groups(steps, z_start, z_step, mode):
 
 
 def z_groups_to_string(groups):
-    """z-stack 之间用 ', ' 分隔 (与原文件格式一致)，相邻的单帧之间用 ','。"""
+    """z-stacks are separated by ', ' (matching the original files); adjacent single frames by ','."""
     out = ""
     for i, g in enumerate(groups):
         if i:
@@ -302,7 +316,7 @@ def z_groups_to_string(groups):
 
 
 def infer_z_params(steps, z_values):
-    """尝试从已有 z_offsets 推断 (起点, 步长, 模式)。失败返回 None。"""
+    """Try to infer (start, step, mode) from existing z_offsets. Returns None on failure."""
     if len(z_values) != total_frames(steps):
         return None
     i = 0
@@ -324,7 +338,7 @@ def infer_z_params(steps, z_values):
 
 
 # ============================================================================
-# Settings (model): 直接保留 ElementTree，保证所有参数原样保存
+# Settings (model): keeps the ElementTree so every parameter is saved unchanged
 # ============================================================================
 def settings_from_string(text):
     return ET.fromstring(text.encode("iso-8859-1"))
@@ -368,15 +382,15 @@ def split_settings_name(stem):
 
 
 def movie_name_for(settings_name):
-    """settings 名去掉样品标签 = Dave 里的影片名 ('Dsk-405s1-750s6-U2OS' -> 'Dsk-405s1-750s6')."""
+    """Settings name without the sample tag = movie name in Dave ('Dsk-405s1-750s6-U2OS' -> 'Dsk-405s1-750s6')."""
     _, tag = split_settings_name(settings_name)
     return settings_name[:-(len(tag) + 1)] if tag and settings_name.endswith("-" + tag) else settings_name
 
 
 # ----------------------------------------------------------------------------
-# 内置 settings 预设。每个预设 = 拍摄序列 + z 规则 + 相对内置模板改动过的参数。
-# film/filename、film/frames、illumination/shutters、z_offsets 都由序列自动生成。
-# z = (起点 µm, 步长 µm, Z_MODES 序号)
+# Built-in settings presets. Each preset = sequence + z rule + parameters changed from the built-in template.
+# film/filename, film/frames, illumination/shutters and z_offsets are generated from the sequence.
+# z = (start µm, step µm, index into Z_MODES)
 # ----------------------------------------------------------------------------
 U2OS_HYB_FOCUSLOCK = {
     "focuslock/locked/buffer_length": "5",
@@ -427,7 +441,7 @@ class KilroyConfig:
         self.valves = []     # [ [name, {valve_id(int): port(str)}], ... ]
         self.pumps = []      # [ [name, {"speed": "2.6", "direction": "Forward"}], ... ]
         self.protocols = []  # [ [name, [[tag, duration(str), command], ...]], ... ]
-        self.comments = {}   # section tag -> [comment text] (出现在该 section 之前)
+        self.comments = {}   # section tag -> [comment text] (comments that appear before that section)
 
     @property
     def num_valves(self):
@@ -442,7 +456,7 @@ class KilroyConfig:
         parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
         root = ET.parse(path, parser).getroot()
         if root.tag != "kilroy_configuration":
-            raise ValueError(f"不是 Kilroy 文件 (根节点是 <{root.tag}>)")
+            raise ValueError(f"Not a Kilroy file (root element is <{root.tag}>)")
         k = cls()
         k.attrib = dict(root.attrib)
         pending = []
@@ -527,41 +541,41 @@ class KilroyConfig:
         problems = []
         vnames = {v[0] for v in self.valves}
         pnames = {p[0] for p in self.pumps}
-        for kind, items in (("阀门命令", self.valves), ("泵命令", self.pumps), ("协议", self.protocols)):
+        for kind, items in (("valve command", self.valves), ("pump command", self.pumps), ("protocol", self.protocols)):
             seen = set()
             for it in items:
                 if it[0] in seen:
-                    problems.append(f"{kind}名称重复: {it[0]}")
+                    problems.append(f"Duplicate {kind} name: {it[0]}")
                 seen.add(it[0])
         for pname, steps in self.protocols:
             for i, (tag, dur, cmd) in enumerate(steps, 1):
                 if tag == "valve" and cmd not in vnames:
-                    problems.append(f"协议 '{pname}' 第 {i} 步: 未定义的阀门命令 '{cmd}'")
+                    problems.append(f"Protocol '{pname}' step {i}: undefined valve command '{cmd}'")
                 if tag == "pump" and cmd not in pnames:
-                    problems.append(f"协议 '{pname}' 第 {i} 步: 未定义的泵命令 '{cmd}'")
+                    problems.append(f"Protocol '{pname}' step {i}: undefined pump command '{cmd}'")
                 try:
                     float(dur)
                 except ValueError:
-                    problems.append(f"协议 '{pname}' 第 {i} 步: 时长 '{dur}' 不是数字")
+                    problems.append(f"Protocol '{pname}' step {i}: duration '{dur}' is not a number")
         return problems
 
 
 # ----------------------------------------------------------------------------
-# 内置 Kilroy 预设: 按实验室的阀门接法和协议模板生成，只有流动/静置时间不同。
+# Built-in Kilroy presets: generated from the lab's valve wiring and protocol templates; only flow/wait times differ.
 # ----------------------------------------------------------------------------
 KILROY_PUMP_COMMENTS = [" speed 200 ~= 833 uL / 10 sec ", " 1 uL corresponds to 1.2 pump position units ",
                         " speed 33 corresponds to 1 mL / min "]
 
 
 def make_kilroy_preset(cleave, hyb, n_hyb=14, primes=(11, 7, 13, 14)):
-    """cleave = (TCEP 流, TCEP 静置, 洗 流, 洗 静置) 秒;
-    hyb = (Hyb 流, Hyb 静置, 洗1 流, 洗1 静置, Readout 流, Readout 静置, 洗2 流, 洗2 静置, Image 流, Image 静置) 秒。"""
+    """cleave = (TCEP flow, TCEP wait, wash flow, wash wait) in seconds;
+    hyb = (hyb flow, hyb wait, wash1 flow, wash1 wait, readout flow, readout wait, wash2 flow, wash2 wait, image flow, image wait) in seconds."""
     k = KilroyConfig()
     k.comments = {"valve_commands": [], "pump_commands": list(KILROY_PUMP_COMMENTS), "kilroy_protocols": [], "_end": []}
     fixed = [("Set Image", {1: "3"}), ("Set Wash", {1: "4"}), ("Set TCEP", {1: "1"}),
              ("Set Readout", {1: "2", 4: "4"}), ("Seal", {})]
     k.valves = [[name, {v: pos.get(v, "8") for v in range(1, 5)}] for name, pos in fixed]
-    # 阀门串联: 阀门 1 的 5–7 口 = Hyb 1–3；阀门 2/3/4 的 1–7 口 = Hyb 4–10 / 11–17 / 18–24
+    # Daisy-chained valves: valve 1 ports 5–7 = Hyb 1–3; valves 2/3/4 ports 1–7 = Hyb 4–10 / 11–17 / 18–24
     hyb_ports = [(1, 5), (1, 6), (1, 7)] + [(v, p) for v in (2, 3, 4) for p in range(1, 8)]
     for n, (valve, port) in enumerate(hyb_ports, 1):
         k.valves.append([f"Set Hyb {n}", {v: (str(port) if v == valve else "8") for v in range(1, 5)}])
@@ -599,22 +613,22 @@ KILROY_PRESETS = {
     "Lab · kilroy_protocol_MERFISH_lab": {
         "file": "kilroy_protocol_MERFISH_lab.xml",
         "make": lambda: make_kilroy_preset((300, 600, 400, 300), (500, 400, 300, 60, 300, 700, 300, 300, 240, 60))},
-    "U2OS hyb · 流动时间更长": {
+    "U2OS hyb · longer flow times": {
         "file": "kilroy_protocol_MERFISH_lab.xml",
         "make": lambda: make_kilroy_preset((500, 660, 500, 600), (600, 400, 400, 60, 400, 700, 400, 300, 400, 60))},
 }
 
 
 # ============================================================================
-# Dave 自动化流程 (model)
+# Dave automation recipe (model)
 #
-# 支持实验室常用的 MERFISH 结构:
-#   [唤醒] → 成像 (Movie Loop 1, 遍历所有位置)
-#   杂交循环 (Hybridize loop k): 每轮 Kilroy 协议 → [唤醒] → 成像
+# Supports the lab's usual MERFISH structure:
+#   [wakeup] → imaging (Movie Loop 1, over all positions)
+#   hyb loop (Hybridize loop k): each round Kilroy protocols → [wakeup] → imaging
 # ============================================================================
 WAKEUP_LOOP = "Movie Loop Wakeup"
 DAVE_MOVIE_TAGS = {"name", "length", "parameters", "check_focus", "overwrite", "variable_entry"}
-DAVE_KINDS = {"image": "成像一次", "hyb": "杂交循环"}
+DAVE_KINDS = {"image": "Image once", "hyb": "Hyb loop"}
 
 
 def make_round_values(fmt, a, b):
@@ -624,7 +638,7 @@ def make_round_values(fmt, a, b):
 
 
 def detect_round_pattern(values):
-    """make_round_values 的逆运算。识别不了返回 None。"""
+    """Inverse of make_round_values. Returns None if no pattern is found."""
     if not values or not values[0]:
         return None
     nums = sorted({int(x) for p in values[0] for x in re.findall(r"\d+", p)})
@@ -671,11 +685,11 @@ class DaveRecipe:
     @classmethod
     def from_root(cls, root):
         if root.tag != "recipe":
-            raise ValueError(f"不是 Dave 流程文件 (根节点是 <{root.tag}>，应为 <recipe>)")
+            raise ValueError(f"Not a Dave recipe (root element is <{root.tag}>, expected <recipe>)")
         r = cls()
         cs = root.find("command_sequence")
         if cs is None:
-            raise ValueError("缺少 <command_sequence>")
+            raise ValueError("Missing <command_sequence>")
         lv = {}
         for v in root.findall("loop_variable"):
             fp = v.find("file_path")
@@ -683,7 +697,7 @@ class DaveRecipe:
             for val in v.findall("value"):
                 for ch in val:
                     if ch.tag != "valve_protocol":
-                        raise ValueError(f"loop_variable 中有不支持的内容 <{ch.tag}>")
+                        raise ValueError(f"Unsupported content in loop_variable: <{ch.tag}>")
                 vals.append([(p.text or "").strip() for p in val])
             lv[v.get("name")] = {"file": (fp.text or "").strip() if fp is not None else None, "values": vals}
         seen_wakeup = []
@@ -691,7 +705,7 @@ class DaveRecipe:
         def parse_movie(mv):
             extra = [c.tag for c in mv if c.tag not in DAVE_MOVIE_TAGS]
             if extra:
-                raise ValueError(f"movie 中有本工具不支持的设置: {', '.join('<%s>' % e for e in extra)}")
+                raise ValueError(f"This movie uses settings the tool does not support: {', '.join('<%s>' % e for e in extra)}")
             cf = mv.find("check_focus")
             return {"name": (mv.findtext("name") or "").strip(), "length": (mv.findtext("length") or "").strip(),
                     "params": (mv.findtext("parameters") or "").strip(),
@@ -710,13 +724,13 @@ class DaveRecipe:
                     continue
                 elif ch.tag == "loop" and ch.find("variable_entry") is not None and ch.find("movie") is None:
                     if in_hyb:
-                        raise ValueError("不支持嵌套的杂交循环")
+                        raise ValueError("Nested hyb loops are not supported")
                     name = ch.get("name", "")
                     inner = parse_seq(list(ch), True)
                     if len(inner) != 1:
-                        raise ValueError(f"循环「{name}」里应正好有一个成像步骤，实际 {len(inner)} 个")
+                        raise ValueError(f"Loop \"{name}\" should contain exactly one imaging step, found {len(inner)}")
                     if name not in lv or not lv[name]["values"]:
-                        raise ValueError(f"找不到循环「{name}」的 loop_variable 取值")
+                        raise ValueError(f"No loop_variable values found for loop \"{name}\"")
                     st = inner[0]
                     st["kind"] = "hyb"
                     st["values"] = lv[name]["values"]
@@ -734,7 +748,7 @@ class DaveRecipe:
                                        "wake": wake is not None, "wake_checks": wake["checks"] if wake else "100"})
                         wake = None
                 else:
-                    raise ValueError(f"本工具不支持的 Dave 元素 <{ch.tag}>")
+                    raise ValueError(f"Unsupported Dave element <{ch.tag}>")
             return stages
 
         r.stages = parse_seq(list(cs), False)
@@ -812,34 +826,34 @@ class DaveRecipe:
     def validate(self, kilroy=None, frames_lookup=None):
         problems = []
         if not self.stages:
-            problems.append("流程里没有任何阶段")
+            problems.append("The recipe has no stages")
         if not self.positions_file.strip():
-            problems.append(f"成像位置文件 ({self.positions_loop}) 为空，运行前需要在 Dave 里指定")
+            problems.append(f"The imaging positions file ({self.positions_loop}) is empty; set it in Dave before running")
         try:
             int(self.wakeup_ms)
         except ValueError:
-            problems.append("唤醒时长不是整数 (ms)")
+            problems.append("Wakeup duration is not an integer (ms)")
         knames = {p[0] for p in kilroy.protocols} if kilroy and kilroy.protocols else None
         for i, st in enumerate(self.stages, 1):
             if not st["params"].strip():
-                problems.append(f"阶段 {i}: 没有指定 settings")
+                problems.append(f"Stage {i}: no settings chosen")
             try:
                 n = int(st["length"])
                 if n < 1:
                     raise ValueError
             except ValueError:
-                problems.append(f"阶段 {i}: 帧数「{st['length']}」无效")
+                problems.append(f"Stage {i}: invalid frame count \"{st['length']}\"")
             else:
                 f = frames_lookup(st["params"]) if frames_lookup else None
                 if f is not None and f != n:
-                    problems.append(f"阶段 {i}: 帧数 {n} 与 settings「{st['params']}」的 {f} 帧不一致")
+                    problems.append(f"Stage {i}: {n} frames does not match the {f} frames of settings \"{st['params']}\"")
             if st["kind"] == "hyb":
                 if not st["values"]:
-                    problems.append(f"阶段 {i}: 杂交循环没有任何轮次")
+                    problems.append(f"Stage {i}: the hyb loop has no rounds")
                 if knames is not None:
                     missing = sorted({p for v in st["values"] for p in v if p not in knames})
                     if missing:
-                        problems.append(f"阶段 {i}: 当前 Kilroy 文件里没有这些协议: {', '.join(missing)}")
+                        problems.append(f"Stage {i}: these protocols are not in the current Kilroy file: {', '.join(missing)}")
         return problems
 
 
@@ -854,7 +868,7 @@ def dave_preset_u2os_hyb():
 
 
 def dave_template(ctx, n_rounds):
-    """用 ② 页当前 settings 的通用流程: 成像一次 [+ n 轮杂交]。ctx = {'settings', 'movie', 'frames'}。"""
+    """Generic recipe using the current tab-2 settings: image once [+ n hyb rounds]. ctx = {'settings', 'movie', 'frames'}."""
     r = DaveRecipe()
     r.stages = [new_dave_stage("image", ctx["settings"], movie=ctx["movie"], length=ctx["frames"])]
     if n_rounds:
@@ -863,22 +877,22 @@ def dave_template(ctx, n_rounds):
     return r
 
 
-# make(ctx) -> DaveRecipe；kilroy = 配套的 Kilroy 预设 (可选)
+# make(ctx) -> DaveRecipe; kilroy = matching Kilroy preset (optional)
 DAVE_PRESETS = {
-    "U2OS hyb · U2OS 1 轮成像 + 14 轮杂交": {"make": lambda ctx: dave_preset_u2os_hyb(),
-                                       "kilroy": "U2OS hyb · 流动时间更长"},
-    "模板 · 1 轮成像 + 14 轮杂交 (② 页当前 settings)": {"make": lambda ctx: dave_template(ctx, 14),
+    "U2OS hyb · U2OS 1 imaging round + 14 hyb rounds": {"make": lambda ctx: dave_preset_u2os_hyb(),
+                                       "kilroy": "U2OS hyb · longer flow times"},
+    "Template · 1 imaging round + 14 hyb rounds (current settings)": {"make": lambda ctx: dave_template(ctx, 14),
                                              "kilroy": None},
-    "模板 · 只成像一次，不跑流控 (② 页当前 settings)": {"make": lambda ctx: dave_template(ctx, 0),
+    "Template · image once, no fluidics (current settings)": {"make": lambda ctx: dave_template(ctx, 0),
                                              "kilroy": None},
 }
 
 
 # ============================================================================
-# GUI 小部件
+# GUI widgets
 # ============================================================================
 def inline_edit(tree, item, column, on_done, values=None):
-    """在 Treeview 单元格上原地编辑。column 是列名。"""
+    """Edit a Treeview cell in place. column is the column name."""
     cols = list(tree["columns"])
     bbox = tree.bbox(item, f"#{cols.index(column) + 1}")
     if not bbox:
@@ -916,7 +930,7 @@ def inline_edit(tree, item, column, on_done, values=None):
             try:
                 f = ed.focus_get()
             except (KeyError, tk.TclError):
-                return  # 焦点在 combobox 下拉列表里
+                return  # focus is in the combobox drop-down list
             if f is None or str(f).startswith(str(ed)):
                 return
             commit()
@@ -961,21 +975,21 @@ def tree_reselect(tree, idx):
 
 
 # ============================================================================
-# 主程序
+# Main application
 # ============================================================================
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("MERFISH 显微镜参数设置工具")
+        self.title("MERFISH Microscope Setup")
         self.geometry("1200x820")
         self.minsize(1120, 780)
-        self.last_dir = APP_DIR
+        self.last_dir = LAB_HAL_DIR if os.path.isdir(LAB_HAL_DIR) else APP_DIR
 
         # --- state ---
-        self.steps = [new_step(w, n) for w, n in SEQUENCE_PRESETS["4色 z-stack (650/560/488/405 f10)"]]
+        self.steps = [new_step(w, n) for w, n in SEQUENCE_PRESETS["4-color z-stack (650/560/488/405 f10)"]]
         self.oversampling = tk.IntVar(value=1)
         self.settings_root = settings_from_string(DEFAULT_SETTINGS_XML)
-        self.settings_source = "内置默认模板 (Dsk-650s10-560s10-488s10-405s10-U2OS)"
+        self.settings_source = "Built-in default template (Dsk-650s10-560s10-488s10-405s10-U2OS)"
         self.kilroy = None
         self.kilroy_path = None
         self.dave = dave_preset_u2os_hyb()
@@ -986,11 +1000,12 @@ class App(tk.Tk):
         self._build_ui()
         self.pull_quick()
         self.refresh_steps()
-        self.v_dave_preset.set(next(iter(DAVE_PRESETS)))  # 启动时载入的就是这个流程
+        self.v_dave_preset.set(next(iter(DAVE_PRESETS)))  # this is the recipe loaded at startup
         self.refresh_dave()
 
-        default_k = os.path.join(APP_DIR, "kilroy_protocol_MERFISH_lab.xml")
-        if os.path.exists(default_k):
+        default_k = next((p for p in (os.path.join(LAB_KILROY_DIR, DEFAULT_KILROY_NAME),
+                                      os.path.join(APP_DIR, DEFAULT_KILROY_NAME)) if os.path.exists(p)), None)
+        if default_k:
             self.load_kilroy(default_k, quiet=True)
         else:
             self.apply_kilroy_preset(next(iter(KILROY_PRESETS)))
@@ -1018,10 +1033,10 @@ class App(tk.Tk):
         self.v_z_start = V(value="0")
         self.v_z_step = V(value="0.8")
         self.v_z_mode = V(value=Z_MODES[0])
-        self.v_status = V(value="就绪")
+        self.v_status = V(value="Ready")
         self.v_seq_info = V()
         self.v_names = V()
-        # 步骤编辑器
+        # step editor
         self.v_step_wl = V(value=LASERS[1][1])
         self.v_step_frames = V(value="10")
         self.v_step_power = V(value="1")
@@ -1047,16 +1062,16 @@ class App(tk.Tk):
 
         top = ttk.Frame(self, padding=(10, 8, 10, 0))
         top.pack(fill="x")
-        ttk.Label(top, text="MERFISH 显微镜参数设置", font=("TkDefaultFont", 15, "bold")).pack(side="left")
-        ttk.Button(top, text="⬇ 一键导出 shutters + settings…", style="Big.TButton",
+        ttk.Label(top, text="MERFISH Setup", font=("TkDefaultFont", 15, "bold")).pack(side="left")
+        ttk.Button(top, text="⬇ Export shutters + settings…", style="Big.TButton",
                    command=self.export_both).pack(side="right")
-        ttk.Button(top, text="打开 settings…", command=self.open_settings).pack(side="right", padx=6)
+        ttk.Button(top, text="Open settings…", command=self.open_settings).pack(side="right", padx=6)
         self.v_settings_preset = tk.StringVar()
         cb = ttk.Combobox(top, textvariable=self.v_settings_preset, values=[preset_label(p) for p in SETTINGS_PRESETS],
                           width=34, state="readonly")
         cb.pack(side="right", padx=(4, 6))
         cb.bind("<<ComboboxSelected>>", lambda e: self.choose_settings_preset())
-        ttk.Label(top, text="载入预设:").pack(side="right")
+        ttk.Label(top, text="Preset:").pack(side="right")
 
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="both", expand=True, padx=10, pady=8)
@@ -1065,11 +1080,11 @@ class App(tk.Tk):
         self.tab_adv = ttk.Frame(self.nb, padding=10)
         self.tab_kil = ttk.Frame(self.nb, padding=10)
         self.tab_dave = ttk.Frame(self.nb, padding=10)
-        self.nb.add(self.tab_seq, text="① 拍摄序列 Shutters / Z")
-        self.nb.add(self.tab_set, text="② 显微镜参数 Settings")
-        self.nb.add(self.tab_adv, text="③ 全部参数 (高级)")
-        self.nb.add(self.tab_kil, text="④ 流控 Kilroy")
-        self.nb.add(self.tab_dave, text="⑤ 自动化 Dave")
+        self.nb.add(self.tab_seq, text="1  Sequence (shutters / Z)")
+        self.nb.add(self.tab_set, text="2  Microscope settings")
+        self.nb.add(self.tab_adv, text="3  All parameters (advanced)")
+        self.nb.add(self.tab_kil, text="4  Fluidics (Kilroy)")
+        self.nb.add(self.tab_dave, text="5  Automation (Dave)")
         self._current_tab = 0
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
@@ -1092,24 +1107,24 @@ class App(tk.Tk):
         f.columnconfigure(1, weight=2)
         f.rowconfigure(1, weight=1)
 
-        # --- 预设 + 文件 ---
+        # --- presets + files ---
         bar = ttk.Frame(f)
         bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        ttk.Label(bar, text="预设:").pack(side="left")
+        ttk.Label(bar, text="Preset:").pack(side="left")
         cb = ttk.Combobox(bar, textvariable=self.v_preset, values=list(SEQUENCE_PRESETS), width=46, state="readonly")
         cb.pack(side="left", padx=4)
         cb.bind("<<ComboboxSelected>>", lambda e: self.apply_preset())
-        ttk.Button(bar, text="保存 shutters…", command=self.save_shutters_as).pack(side="right")
-        ttk.Button(bar, text="打开 shutters…", command=self.open_shutters).pack(side="right", padx=4)
+        ttk.Button(bar, text="Save shutters…", command=self.save_shutters_as).pack(side="right")
+        ttk.Button(bar, text="Open shutters…", command=self.open_shutters).pack(side="right", padx=4)
         ttk.Label(bar, text="Oversampling:").pack(side="right", padx=(0, 2))
         ttk.Spinbox(bar, from_=1, to=100, textvariable=self.oversampling, width=4).pack(side="right", padx=(0, 12))
 
-        # --- 步骤表 ---
-        left = ttk.LabelFrame(f, text="曝光步骤 (按顺序执行，每一步 = 一个激光 × N 帧)", padding=8)
+        # --- step table ---
+        left = ttk.LabelFrame(f, text="Exposure steps (run in order; each step = one laser × N frames)", padding=8)
         left.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
         left.rowconfigure(0, weight=1)
         left.columnconfigure(0, weight=1)
-        cols = ("#", "激光 Laser", "通道 Ch", "帧数 Frames", "功率 Power", "帧范围")
+        cols = ("#", "Laser", "Channel", "Frames", "Power", "Frame range")
         tf, self.step_tree = make_tree(left, cols, [36, 90, 70, 90, 80, 120], height=10,
                                        anchors=["center"] * 6)
         tf.grid(row=0, column=0, sticky="nsew")
@@ -1120,43 +1135,43 @@ class App(tk.Tk):
 
         ed = ttk.Frame(left)
         ed.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        ttk.Label(ed, text="激光").grid(row=0, column=0)
+        ttk.Label(ed, text="Laser").grid(row=0, column=0)
         ttk.Combobox(ed, textvariable=self.v_step_wl, values=[w for _, w, _ in LASERS], width=6,
                      state="readonly").grid(row=0, column=1, padx=(2, 10))
-        ttk.Label(ed, text="帧数").grid(row=0, column=2)
+        ttk.Label(ed, text="Frames").grid(row=0, column=2)
         ttk.Spinbox(ed, from_=1, to=1000, textvariable=self.v_step_frames, width=6).grid(row=0, column=3, padx=(2, 10))
-        ttk.Label(ed, text="功率").grid(row=0, column=4)
+        ttk.Label(ed, text="Power").grid(row=0, column=4)
         ttk.Entry(ed, textvariable=self.v_step_power, width=6).grid(row=0, column=5, padx=(2, 10))
-        ttk.Button(ed, text="＋ 添加", command=self.step_add).grid(row=0, column=6, padx=2)
-        ttk.Button(ed, text="✎ 更新所选", command=self.step_update).grid(row=0, column=7, padx=2)
+        ttk.Button(ed, text="+ Add", command=self.step_add).grid(row=0, column=6, padx=2)
+        ttk.Button(ed, text="✎ Update selected", command=self.step_update).grid(row=0, column=7, padx=2)
 
         ed2 = ttk.Frame(left)
         ed2.grid(row=2, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(ed2, text="↑ 上移", command=lambda: self.step_move(-1)).pack(side="left")
-        ttk.Button(ed2, text="↓ 下移", command=lambda: self.step_move(1)).pack(side="left", padx=4)
-        ttk.Button(ed2, text="✕ 删除", command=self.step_delete).pack(side="left")
-        ttk.Button(ed2, text="＋405 fiducial 到开头", command=self.step_add_fiducial).pack(side="left", padx=4)
-        ttk.Button(ed2, text="清空", command=self.step_clear).pack(side="left")
-        ttk.Label(left, text="提示: 选中一行后修改上面的字段再点「更新所选」，或直接双击表格单元格修改",
+        ttk.Button(ed2, text="↑ Up", command=lambda: self.step_move(-1)).pack(side="left")
+        ttk.Button(ed2, text="↓ Down", command=lambda: self.step_move(1)).pack(side="left", padx=4)
+        ttk.Button(ed2, text="✕ Delete", command=self.step_delete).pack(side="left")
+        ttk.Button(ed2, text="+ 405 fiducial at start", command=self.step_add_fiducial).pack(side="left", padx=4)
+        ttk.Button(ed2, text="Clear", command=self.step_clear).pack(side="left")
+        ttk.Label(left, text="Tip: select a row, change the fields above and click Update selected, or double-click a cell to edit it",
                   style="Hint.TLabel").grid(row=3, column=0, sticky="w", pady=(6, 0))
 
-        # --- Z 扫描 ---
-        right = ttk.LabelFrame(f, text="Z 扫描 (hardware_z_scan / z_offsets)", padding=8)
+        # --- Z scan ---
+        right = ttk.LabelFrame(f, text="Z scan (hardware_z_scan / z_offsets)", padding=8)
         right.grid(row=1, column=1, sticky="nsew")
         right.columnconfigure(1, weight=1)
         right.rowconfigure(5, weight=1)
-        ttk.Checkbutton(right, text="根据序列自动生成 z_offsets", variable=self.v_auto_z).grid(
+        ttk.Checkbutton(right, text="Auto-generate z_offsets from the sequence", variable=self.v_auto_z).grid(
             row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(right, text="z 起点 (µm)").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(right, text="z start (µm)").grid(row=1, column=0, sticky="w", pady=2)
         self.e_z_start = ttk.Entry(right, textvariable=self.v_z_start, width=8)
         self.e_z_start.grid(row=1, column=1, sticky="w")
-        ttk.Label(right, text="z 步长 (µm)").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(right, text="z step (µm)").grid(row=2, column=0, sticky="w", pady=2)
         self.e_z_step = ttk.Entry(right, textvariable=self.v_z_step, width=8)
         self.e_z_step.grid(row=2, column=1, sticky="w")
-        ttk.Label(right, text="扫描方式").grid(row=3, column=0, sticky="w", pady=2)
+        ttk.Label(right, text="Scan mode").grid(row=3, column=0, sticky="w", pady=2)
         self.cb_z_mode = ttk.Combobox(right, textvariable=self.v_z_mode, values=Z_MODES, state="readonly", width=22)
         self.cb_z_mode.grid(row=3, column=1, sticky="w")
-        ttk.Label(right, text="单帧步骤 (如 405 fiducial) 固定在 z 起点；多帧步骤做 z-stack。",
+        ttk.Label(right, text="Single-frame steps (e.g. 405 fiducial) stay at z start; multi-frame steps take a z-stack.",
                   style="Hint.TLabel", wraplength=300).grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 4))
         self.txt_z = tk.Text(right, width=36, height=6, wrap="word", font=("Courier", 10))
         self.txt_z.grid(row=5, column=0, columnspan=3, sticky="nsew")
@@ -1164,8 +1179,8 @@ class App(tk.Tk):
         self.lbl_zcount = ttk.Label(right, text="")
         self.lbl_zcount.grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
-        # --- 预览 ---
-        pv = ttk.LabelFrame(f, text="时序预览 (色块 = 每帧激光, 折线 = z 偏移)", padding=6)
+        # --- preview ---
+        pv = ttk.LabelFrame(f, text="Timing preview (blocks = laser per frame, line = z offset)", padding=6)
         pv.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.canvas = tk.Canvas(pv, height=150, background="white", highlightthickness=0)
         self.canvas.pack(fill="x", expand=True)
@@ -1183,67 +1198,67 @@ class App(tk.Tk):
 
         src = ttk.Frame(f)
         src.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        ttk.Label(src, text="模板:").pack(side="left")
+        ttk.Label(src, text="Template:").pack(side="left")
         self.lbl_source = ttk.Label(src, text="", style="Hint.TLabel")
         self.lbl_source.pack(side="left", padx=4)
-        ttk.Button(src, text="保存 settings…", command=self.save_settings_as).pack(side="right")
-        ttk.Button(src, text="恢复内置模板", command=self.reset_settings).pack(side="right", padx=4)
-        ttk.Button(src, text="打开 settings…", command=self.open_settings).pack(side="right")
+        ttk.Button(src, text="Save settings…", command=self.save_settings_as).pack(side="right")
+        ttk.Button(src, text="Reset to built-in template", command=self.reset_settings).pack(side="right", padx=4)
+        ttk.Button(src, text="Open settings…", command=self.open_settings).pack(side="right")
 
-        # 命名
-        g = ttk.LabelFrame(f, text="文件命名", padding=8)
+        # naming
+        g = ttk.LabelFrame(f, text="File naming", padding=8)
         g.grid(row=1, column=0, columnspan=2, sticky="ew", pady=4)
         g.columnconfigure(5, weight=1)
-        ttk.Label(g, text="前缀 (Dsk / Epi …)").grid(row=0, column=0, sticky="w")
+        ttk.Label(g, text="Prefix (Dsk / Epi …)").grid(row=0, column=0, sticky="w")
         ttk.Combobox(g, textvariable=self.v_prefix, values=["Dsk", "Epi"], width=8).grid(row=0, column=1, padx=4)
-        ttk.Label(g, text="样品标签").grid(row=0, column=2, sticky="w", padx=(12, 0))
+        ttk.Label(g, text="Sample tag").grid(row=0, column=2, sticky="w", padx=(12, 0))
         ttk.Entry(g, textvariable=self.v_tag, width=14).grid(row=0, column=3, padx=4)
-        ttk.Label(g, text="(如 U2OS / cell / tissue，可留空)", style="Hint.TLabel").grid(row=0, column=4, sticky="w")
-        ttk.Label(g, text="影片文件名 film/filename").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(g, text="(e.g. U2OS / cell / tissue; optional)", style="Hint.TLabel").grid(row=0, column=4, sticky="w")
+        ttk.Label(g, text="Movie name (film/filename)").grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.e_film = ttk.Entry(g, textvariable=self.v_film, width=56)
         self.e_film.grid(row=1, column=1, columnspan=4, sticky="w", padx=4, pady=(6, 0))
-        ttk.Checkbutton(g, text="自动", variable=self.v_auto_film,
+        ttk.Checkbutton(g, text="Auto", variable=self.v_auto_film,
                         command=self._on_auto_film).grid(row=1, column=5, sticky="w", pady=(6, 0))
-        ttk.Checkbutton(g, text="影片名包含样品标签", variable=self.v_tag_in_film).grid(
+        ttk.Checkbutton(g, text="Include sample tag in movie name", variable=self.v_tag_in_film).grid(
             row=2, column=1, columnspan=4, sticky="w", padx=4)
         self.lbl_linked = ttk.Label(g, text="", style="Hint.TLabel", justify="left")
         self.lbl_linked.grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
 
-        # 相机
-        cam = ttk.LabelFrame(f, text="相机 camera1", padding=8)
+        # camera
+        cam = ttk.LabelFrame(f, text="Camera (camera1)", padding=8)
         cam.grid(row=2, column=0, sticky="nsew", padx=(0, 6), pady=4)
-        ttk.Label(cam, text="曝光时间 exposure_time (s)").grid(row=0, column=0, sticky="w")
+        ttk.Label(cam, text="Exposure time (s)").grid(row=0, column=0, sticky="w")
         ttk.Entry(cam, textvariable=self.v_exposure, width=12).grid(row=0, column=1, sticky="w", padx=4)
         ttk.Label(cam, textvariable=self.v_fps_hint, style="Hint.TLabel").grid(row=0, column=2, sticky="w")
         qe = ttk.Frame(cam)
         qe.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 6))
-        ttk.Label(qe, text="常用:", style="Hint.TLabel").pack(side="left")
+        ttk.Label(qe, text="Common:", style="Hint.TLabel").pack(side="left")
         for val in ("0.05", "0.1", "0.2", "0.25", "0.5", "1.0"):
             ttk.Button(qe, text=val, width=5, command=lambda v=val: self.v_exposure.set(v)).pack(side="left", padx=1)
         ttk.Checkbutton(cam, text="flip_horizontal", variable=self.v_cam_fh).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(cam, text="flip_vertical", variable=self.v_cam_fv).grid(row=3, column=0, sticky="w")
         ttk.Checkbutton(cam, text="transpose", variable=self.v_cam_tr).grid(row=4, column=0, sticky="w")
-        ttk.Label(cam, text="其余相机参数 (ROI、binning、trigger…) 在「③ 全部参数」里修改",
+        ttk.Label(cam, text="Other camera parameters (ROI, binning, trigger…) are in tab 3, All parameters",
                   style="Hint.TLabel", wraplength=380).grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
-        # 激光功率
-        pw = ttk.LabelFrame(f, text="默认激光功率 illumination/default_power (0–1)", padding=8)
+        # laser power
+        pw = ttk.LabelFrame(f, text="Default laser power (illumination/default_power, 0–1)", padding=8)
         pw.grid(row=2, column=1, sticky="nsew", pady=4)
         for i, (c, wl, col) in enumerate(LASERS):
             tk.Label(pw, text=f"■ {wl} nm (ch {c})", fg=col).grid(row=i, column=0, sticky="w", pady=1)
             ttk.Entry(pw, textvariable=self.v_power[i], width=8).grid(row=i, column=1, padx=4)
         bb = ttk.Frame(pw)
         bb.grid(row=N_CHANNELS, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        ttk.Button(bb, text="全部 = 1", command=lambda: [v.set("1.000") for v in self.v_power]).pack(side="left")
+        ttk.Button(bb, text="All = 1", command=lambda: [v.set("1.000") for v in self.v_power]).pack(side="left")
 
-        # 物镜 / mosaic
-        mo = ttk.LabelFrame(f, text="物镜 / Mosaic", padding=8)
+        # objective / mosaic
+        mo = ttk.LabelFrame(f, text="Objective / Mosaic", padding=8)
         mo.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4)
-        ttk.Label(mo, text="当前物镜").grid(row=0, column=0, sticky="w")
+        ttk.Label(mo, text="Active objective").grid(row=0, column=0, sticky="w")
         self.cb_objective = ttk.Combobox(mo, textvariable=self.v_objective, values=["obj1", "obj2"], width=6,
                                          state="readonly")
         self.cb_objective.grid(row=0, column=1, sticky="w", padx=4)
-        for j, h in enumerate(("名称", "µm / pixel", "x 偏移", "y 偏移")):
+        for j, h in enumerate(("Name", "µm / pixel", "x offset", "y offset")):
             ttk.Label(mo, text=h, style="Hint.TLabel").grid(row=1, column=1 + j, sticky="w", padx=4)
         self.obj_rows = {}
         for r, key in enumerate(("obj1", "obj2", "obj3")):
@@ -1263,16 +1278,16 @@ class App(tk.Tk):
     def _build_adv_tab(self, f):
         f.rowconfigure(1, weight=1)
         f.columnconfigure(0, weight=1)
-        ttk.Label(f, text="settings 文件中的所有参数。双击「值」可修改；这里的修改与「②」页同步。",
+        ttk.Label(f, text="Every parameter in the settings file. Double-click a value to edit it; changes stay in sync with tab 2.",
                   style="Hint.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
         frame = ttk.Frame(f)
         frame.grid(row=1, column=0, sticky="nsew")
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         self.adv_tree = ttk.Treeview(frame, columns=("type", "value"), show="tree headings")
-        self.adv_tree.heading("#0", text="参数")
-        self.adv_tree.heading("type", text="类型")
-        self.adv_tree.heading("value", text="值")
+        self.adv_tree.heading("#0", text="Parameter")
+        self.adv_tree.heading("type", text="Type")
+        self.adv_tree.heading("value", text="Value")
         self.adv_tree.column("#0", width=300)
         self.adv_tree.column("type", width=80, anchor="center")
         self.adv_tree.column("value", width=600)
@@ -1289,16 +1304,16 @@ class App(tk.Tk):
         f.columnconfigure(0, weight=1)
         bar = ttk.Frame(f)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(bar, text="流控预设:").pack(side="left")
+        ttk.Label(bar, text="Fluidics preset:").pack(side="left")
         self.v_kilroy_preset = tk.StringVar()
         cb = ttk.Combobox(bar, textvariable=self.v_kilroy_preset, values=list(KILROY_PRESETS), width=32,
                           state="readonly")
         cb.pack(side="left", padx=(4, 16))
         cb.bind("<<ComboboxSelected>>", lambda e: self.choose_kilroy_preset())
-        ttk.Button(bar, text="打开 Kilroy…", command=self.open_kilroy).pack(side="left")
-        ttk.Button(bar, text="保存", command=self.save_kilroy).pack(side="left", padx=4)
-        ttk.Button(bar, text="另存为…", command=self.save_kilroy_as).pack(side="left")
-        ttk.Button(bar, text="检查错误", command=self.check_kilroy).pack(side="left", padx=4)
+        ttk.Button(bar, text="Open Kilroy…", command=self.open_kilroy).pack(side="left")
+        ttk.Button(bar, text="Save", command=self.save_kilroy).pack(side="left", padx=4)
+        ttk.Button(bar, text="Save as…", command=self.save_kilroy_as).pack(side="left")
+        ttk.Button(bar, text="Check for errors", command=self.check_kilroy).pack(side="left", padx=4)
         self.lbl_kilroy = ttk.Label(f, text="", style="Hint.TLabel")
         self.lbl_kilroy.grid(row=1, column=0, sticky="w", pady=(0, 6))
 
@@ -1308,15 +1323,15 @@ class App(tk.Tk):
         tv = ttk.Frame(knb, padding=8)
         tpu = ttk.Frame(knb, padding=8)
         tg = ttk.Frame(knb, padding=8)
-        knb.add(tp, text="协议 Protocols")
-        knb.add(tg, text="批量生成 (杂交轮次 / Prime)")
-        knb.add(tv, text="阀门命令 Valve commands")
-        knb.add(tpu, text="泵命令 Pump commands")
+        knb.add(tp, text="Protocols")
+        knb.add(tg, text="Generate (hyb rounds / Prime)")
+        knb.add(tv, text="Valve commands")
+        knb.add(tpu, text="Pump commands")
 
         # ---- protocols ----
         tp.columnconfigure(1, weight=1)
         tp.rowconfigure(0, weight=1)
-        lf = ttk.LabelFrame(tp, text="协议列表", padding=6)
+        lf = ttk.LabelFrame(tp, text="Protocol list", padding=6)
         lf.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         lf.rowconfigure(0, weight=1)
         self.proto_list = tk.Listbox(lf, width=28, exportselection=False, activestyle="none")
@@ -1327,19 +1342,19 @@ class App(tk.Tk):
         self.proto_list.bind("<<ListboxSelect>>", lambda e: self.refresh_proto_steps())
         pb = ttk.Frame(lf)
         pb.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        for k, (txt, cmd) in enumerate((("新建", self.proto_new), ("复制", self.proto_dup),
-                                        ("重命名", self.proto_rename), ("删除", self.proto_delete),
-                                        ("↑ 上移", lambda: self.proto_move(-1)),
-                                        ("↓ 下移", lambda: self.proto_move(1)))):
+        for k, (txt, cmd) in enumerate((("New", self.proto_new), ("Duplicate", self.proto_dup),
+                                        ("Rename", self.proto_rename), ("Delete", self.proto_delete),
+                                        ("↑ Up", lambda: self.proto_move(-1)),
+                                        ("↓ Down", lambda: self.proto_move(1)))):
             ttk.Button(pb, text=txt, command=cmd).grid(row=k // 3, column=k % 3, sticky="ew", padx=1, pady=1)
         for c in range(3):
             pb.columnconfigure(c, weight=1)
 
-        rf = ttk.LabelFrame(tp, text="步骤 (双击单元格修改)", padding=6)
+        rf = ttk.LabelFrame(tp, text="Steps (double-click a cell to edit)", padding=6)
         rf.grid(row=0, column=1, sticky="nsew")
         rf.rowconfigure(0, weight=1)
         rf.columnconfigure(0, weight=1)
-        cols = ("#", "类型", "时长 (s)", "命令", "开始时间")
+        cols = ("#", "Type", "Duration (s)", "Command", "Start time")
         sf, self.pstep_tree = make_tree(rf, cols, [40, 70, 80, 220, 90], height=14,
                                         anchors=["center", "center", "e", "w", "e"])
         sf.grid(row=0, column=0, sticky="nsew")
@@ -1350,12 +1365,12 @@ class App(tk.Tk):
         self.lbl_proto_total.grid(row=1, column=0, sticky="w", pady=(6, 0))
         sb2 = ttk.Frame(rf)
         sb2.grid(row=2, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(sb2, text="＋ 阀门步骤", command=lambda: self.pstep_add("valve")).pack(side="left")
-        ttk.Button(sb2, text="＋ 泵步骤", command=lambda: self.pstep_add("pump")).pack(side="left", padx=2)
-        ttk.Button(sb2, text="复制", command=self.pstep_dup).pack(side="left")
-        ttk.Button(sb2, text="✕ 删除", command=self.pstep_delete).pack(side="left", padx=2)
-        ttk.Button(sb2, text="↑ 上移", command=lambda: self.pstep_move(-1)).pack(side="left")
-        ttk.Button(sb2, text="↓ 下移", command=lambda: self.pstep_move(1)).pack(side="left", padx=2)
+        ttk.Button(sb2, text="+ Valve step", command=lambda: self.pstep_add("valve")).pack(side="left")
+        ttk.Button(sb2, text="+ Pump step", command=lambda: self.pstep_add("pump")).pack(side="left", padx=2)
+        ttk.Button(sb2, text="Duplicate", command=self.pstep_dup).pack(side="left")
+        ttk.Button(sb2, text="✕ Delete", command=self.pstep_delete).pack(side="left", padx=2)
+        ttk.Button(sb2, text="↑ Up", command=lambda: self.pstep_move(-1)).pack(side="left")
+        ttk.Button(sb2, text="↓ Down", command=lambda: self.pstep_move(1)).pack(side="left", padx=2)
 
         # ---- valves ----
         tv.rowconfigure(0, weight=1)
@@ -1367,25 +1382,25 @@ class App(tk.Tk):
         self.valve_tree = None
         vb = ttk.Frame(tv)
         vb.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(vb, text="＋ 新建", command=self.valve_new).pack(side="left")
-        ttk.Button(vb, text="复制", command=self.valve_dup).pack(side="left", padx=4)
-        ttk.Button(vb, text="✕ 删除", command=self.valve_delete).pack(side="left")
+        ttk.Button(vb, text="+ New", command=self.valve_new).pack(side="left")
+        ttk.Button(vb, text="Duplicate", command=self.valve_dup).pack(side="left", padx=4)
+        ttk.Button(vb, text="✕ Delete", command=self.valve_delete).pack(side="left")
         ttk.Button(vb, text="↑", width=3, command=lambda: self.valve_move(-1)).pack(side="left", padx=4)
         ttk.Button(vb, text="↓", width=3, command=lambda: self.valve_move(1)).pack(side="left")
-        ttk.Button(vb, text="阀门数量…", command=self.valve_set_count).pack(side="left", padx=12)
-        ttk.Label(tv, text="双击单元格修改名称 / 端口 (port)。重命名会同步更新协议中的引用。",
+        ttk.Button(vb, text="Number of valves…", command=self.valve_set_count).pack(side="left", padx=12)
+        ttk.Label(tv, text="Double-click a cell to edit the name or port. Renaming also updates references in protocols.",
                   style="Hint.TLabel").grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         # ---- pumps ----
         tpu.rowconfigure(0, weight=1)
         tpu.columnconfigure(0, weight=1)
-        pf, self.pump_tree = make_tree(tpu, ("名称", "speed", "direction"), [240, 100, 120], height=8)
+        pf, self.pump_tree = make_tree(tpu, ("Name", "speed", "direction"), [240, 100, 120], height=8)
         pf.grid(row=0, column=0, sticky="nsew")
         self.pump_tree.bind("<Double-1>", self._on_pump_double)
         pbb = ttk.Frame(tpu)
         pbb.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(pbb, text="＋ 新建", command=self.pump_new).pack(side="left")
-        ttk.Button(pbb, text="✕ 删除", command=self.pump_delete).pack(side="left", padx=4)
+        ttk.Button(pbb, text="+ New", command=self.pump_new).pack(side="left")
+        ttk.Button(pbb, text="✕ Delete", command=self.pump_delete).pack(side="left", padx=4)
         self.lbl_pump_comments = ttk.Label(pbb, text="", style="Hint.TLabel", justify="left")
         self.lbl_pump_comments.pack(side="right")
 
@@ -1401,32 +1416,32 @@ class App(tk.Tk):
         self.g_proto_fmt = V(value="Hybridize {n}")
         self.g_valve_fmt = V(value="Set Hyb {n}")
 
-        h = ttk.LabelFrame(tg, text="按模板批量生成杂交轮次协议", padding=10)
+        h = ttk.LabelFrame(tg, text="Generate hybridization-round protocols from a template", padding=10)
         h.pack(fill="x")
         r = 0
-        ttk.Label(h, text="模板协议").grid(row=r, column=0, sticky="w")
+        ttk.Label(h, text="Template protocol").grid(row=r, column=0, sticky="w")
         self.cb_g_template = ttk.Combobox(h, textvariable=self.g_template, width=28, state="readonly")
         self.cb_g_template.grid(row=r, column=1, sticky="w", padx=4)
-        ttk.Label(h, text="模板对应轮次 n =").grid(row=r, column=2, sticky="e", padx=(12, 0))
+        ttk.Label(h, text="Template round n =").grid(row=r, column=2, sticky="e", padx=(12, 0))
         ttk.Entry(h, textvariable=self.g_template_n, width=5).grid(row=r, column=3, sticky="w", padx=4)
         r += 1
-        ttk.Label(h, text="生成轮次").grid(row=r, column=0, sticky="w", pady=4)
+        ttk.Label(h, text="Rounds").grid(row=r, column=0, sticky="w", pady=4)
         rr = ttk.Frame(h)
         rr.grid(row=r, column=1, sticky="w", padx=4)
         ttk.Spinbox(rr, from_=1, to=99, textvariable=self.g_from, width=5).pack(side="left")
-        ttk.Label(rr, text=" 到 ").pack(side="left")
+        ttk.Label(rr, text=" to ").pack(side="left")
         ttk.Spinbox(rr, from_=1, to=99, textvariable=self.g_to, width=5).pack(side="left")
         r += 1
-        ttk.Label(h, text="协议名格式").grid(row=r, column=0, sticky="w")
+        ttk.Label(h, text="Protocol name format").grid(row=r, column=0, sticky="w")
         ttk.Entry(h, textvariable=self.g_proto_fmt, width=30).grid(row=r, column=1, sticky="w", padx=4)
-        ttk.Label(h, text="阀门命令格式").grid(row=r, column=2, sticky="e", padx=(12, 0))
+        ttk.Label(h, text="Valve command format").grid(row=r, column=2, sticky="e", padx=(12, 0))
         ttk.Entry(h, textvariable=self.g_valve_fmt, width=20).grid(row=r, column=3, sticky="w", padx=4)
         r += 1
-        ttk.Label(h, text="说明: 复制模板协议，把其中的「阀门命令格式(n=模板轮次)」替换为对应轮次；"
-                          "同名协议会被覆盖。{n} 代表轮次号。",
+        ttk.Label(h, text="Copies the template protocol and replaces its valve command (format with n = template round) with each round's. "
+                          "Protocols with the same name are overwritten. {n} stands for the round number.",
                   style="Hint.TLabel", wraplength=760).grid(row=r, column=0, columnspan=4, sticky="w", pady=(4, 6))
         r += 1
-        ttk.Button(h, text="生成杂交协议", command=self.generate_hybs).grid(row=r, column=0, sticky="w")
+        ttk.Button(h, text="Generate hyb protocols", command=self.generate_hybs).grid(row=r, column=0, sticky="w")
 
         self.g_prime_n = V(value="16")
         self.g_prime_pump = V(value="Flow 2 ml/min")
@@ -1436,28 +1451,28 @@ class App(tk.Tk):
         self.g_prime_extra_dur = V(value="30")
         self.g_prime_last = V(value="Set Wash")
         self.g_prime_last_dur = V(value="60")
-        p = ttk.LabelFrame(tg, text="生成 Prime 协议 (冲洗所有管路)", padding=10)
+        p = ttk.LabelFrame(tg, text="Generate Prime protocol (flush all lines)", padding=10)
         p.pack(fill="x", pady=(10, 0))
-        ttk.Label(p, text="杂交瓶数 N").grid(row=0, column=0, sticky="w")
+        ttk.Label(p, text="Hyb bottles N").grid(row=0, column=0, sticky="w")
         ttk.Spinbox(p, from_=1, to=99, textvariable=self.g_prime_n, width=5).grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(p, text="开泵命令").grid(row=0, column=2, sticky="e", padx=(12, 0))
+        ttk.Label(p, text="Pump command").grid(row=0, column=2, sticky="e", padx=(12, 0))
         self.cb_prime_pump = ttk.Combobox(p, textvariable=self.g_prime_pump, width=18)
         self.cb_prime_pump.grid(row=0, column=3, sticky="w", padx=4)
-        ttk.Label(p, text="时长").grid(row=0, column=4, sticky="e")
+        ttk.Label(p, text="Duration").grid(row=0, column=4, sticky="e")
         ttk.Entry(p, textvariable=self.g_prime_pump_dur, width=5).grid(row=0, column=5, sticky="w", padx=4)
-        ttk.Label(p, text="每个 Hyb 阀门时长 (s)").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(p, text="Duration per Hyb valve (s)").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Entry(p, textvariable=self.g_prime_hyb_dur, width=5).grid(row=1, column=1, sticky="w", padx=4)
-        ttk.Label(p, text="其他阀门").grid(row=2, column=0, sticky="w")
+        ttk.Label(p, text="Other valves").grid(row=2, column=0, sticky="w")
         ttk.Entry(p, textvariable=self.g_prime_extra, width=36).grid(row=2, column=1, columnspan=3, sticky="w", padx=4)
-        ttk.Label(p, text="时长").grid(row=2, column=4, sticky="e")
+        ttk.Label(p, text="Duration").grid(row=2, column=4, sticky="e")
         ttk.Entry(p, textvariable=self.g_prime_extra_dur, width=5).grid(row=2, column=5, sticky="w", padx=4)
-        ttk.Label(p, text="最后阀门").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(p, text="Last valve").grid(row=3, column=0, sticky="w", pady=4)
         ttk.Entry(p, textvariable=self.g_prime_last, width=18).grid(row=3, column=1, columnspan=3, sticky="w", padx=4)
-        ttk.Label(p, text="时长").grid(row=3, column=4, sticky="e")
+        ttk.Label(p, text="Duration").grid(row=3, column=4, sticky="e")
         ttk.Entry(p, textvariable=self.g_prime_last_dur, width=5).grid(row=3, column=5, sticky="w", padx=4)
-        ttk.Label(p, text="生成名为「Prime N + 4」的协议: 开泵 → Set Hyb 1…N → 其他阀门 → 最后阀门 → Stop Flow",
+        ttk.Label(p, text="Creates a protocol named \"Prime N + 4\": pump on → Set Hyb 1…N → other valves → last valve → Stop Flow",
                   style="Hint.TLabel").grid(row=4, column=0, columnspan=6, sticky="w", pady=(4, 6))
-        ttk.Button(p, text="生成 Prime 协议", command=self.generate_prime).grid(row=5, column=0, sticky="w")
+        ttk.Button(p, text="Generate Prime protocol", command=self.generate_prime).grid(row=5, column=0, sticky="w")
 
     # ------------------------------------------------------------ tab 5 UI
     def _build_dave_tab(self, f):
@@ -1466,15 +1481,15 @@ class App(tk.Tk):
         f.columnconfigure(0, weight=1)
         bar = ttk.Frame(f)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(bar, text="流程预设:").pack(side="left")
+        ttk.Label(bar, text="Recipe preset:").pack(side="left")
         self.v_dave_preset = V()
         cb = ttk.Combobox(bar, textvariable=self.v_dave_preset, values=list(DAVE_PRESETS), width=40, state="readonly")
         cb.pack(side="left", padx=(4, 16))
         cb.bind("<<ComboboxSelected>>", lambda e: self.choose_dave_preset())
-        ttk.Button(bar, text="打开 Dave…", command=self.open_dave).pack(side="left")
-        ttk.Button(bar, text="保存", command=self.save_dave).pack(side="left", padx=4)
-        ttk.Button(bar, text="另存为…", command=self.save_dave_as).pack(side="left")
-        ttk.Button(bar, text="检查错误", command=self.check_dave).pack(side="left", padx=4)
+        ttk.Button(bar, text="Open Dave…", command=self.open_dave).pack(side="left")
+        ttk.Button(bar, text="Save", command=self.save_dave).pack(side="left", padx=4)
+        ttk.Button(bar, text="Save as…", command=self.save_dave_as).pack(side="left")
+        ttk.Button(bar, text="Check for errors", command=self.check_dave).pack(side="left", padx=4)
         self.lbl_dave = ttk.Label(f, text="", style="Hint.TLabel")
         self.lbl_dave.grid(row=1, column=0, sticky="w", pady=(0, 6))
 
@@ -1482,13 +1497,13 @@ class App(tk.Tk):
         dnb.grid(row=2, column=0, sticky="nsew")
         ed = ttk.Frame(dnb, padding=8)
         pv = ttk.Frame(dnb, padding=8)
-        dnb.add(ed, text="流程编辑")
-        dnb.add(pv, text="XML 预览")
+        dnb.add(ed, text="Recipe")
+        dnb.add(pv, text="XML preview")
         ed.columnconfigure(0, weight=1)
         ed.rowconfigure(1, weight=1)
 
-        # 全局
-        g = ttk.LabelFrame(ed, text="全局", padding=8)
+        # global
+        g = ttk.LabelFrame(ed, text="Global", padding=8)
         g.grid(row=0, column=0, sticky="ew")
         g.columnconfigure(3, weight=1)
         self.dv_wakeup_ms = V()
@@ -1496,29 +1511,29 @@ class App(tk.Tk):
         self.dv_wakeup_params = V()
         self.dv_wakeup_length = V()
         self.dv_positions = V()
-        ttk.Label(g, text="唤醒时长 wakeup (ms)").grid(row=0, column=0, sticky="w")
+        ttk.Label(g, text="Wakeup (ms)").grid(row=0, column=0, sticky="w")
         ttk.Entry(g, textvariable=self.dv_wakeup_ms, width=8).grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(g, text="唤醒位置文件").grid(row=0, column=2, sticky="e", padx=(12, 0))
+        ttk.Label(g, text="Wakeup positions file").grid(row=0, column=2, sticky="e", padx=(12, 0))
         ttk.Entry(g, textvariable=self.dv_wakeup_file, width=40).grid(row=0, column=3, sticky="ew", padx=4)
-        ttk.Label(g, text="唤醒 settings / 帧数").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(g, text="Wakeup settings / frames").grid(row=1, column=0, sticky="w", pady=(4, 0))
         wf = ttk.Frame(g)
         wf.grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
         ttk.Entry(wf, textvariable=self.dv_wakeup_params, width=9).pack(side="left")
         ttk.Entry(wf, textvariable=self.dv_wakeup_length, width=4).pack(side="left", padx=(4, 0))
-        ttk.Label(g, text="成像位置文件").grid(row=1, column=2, sticky="e", padx=(12, 0), pady=(4, 0))
+        ttk.Label(g, text="Imaging positions file").grid(row=1, column=2, sticky="e", padx=(12, 0), pady=(4, 0))
         ttk.Entry(g, textvariable=self.dv_positions, width=40).grid(row=1, column=3, sticky="ew", padx=4, pady=(4, 0))
-        ttk.Label(g, text="位置文件是显微镜电脑上的路径 (如 D:\\…\\positions.txt)；可以留空，运行前在 Dave 里指定。",
+        ttk.Label(g, text="Positions files are paths on the microscope PC (e.g. D:\\…\\positions.txt); you can leave them empty and set them in Dave before running.",
                   style="Hint.TLabel").grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         for v in (self.dv_wakeup_ms, self.dv_wakeup_file, self.dv_wakeup_params, self.dv_wakeup_length,
                   self.dv_positions):
             v.trace_add("write", lambda *a: self._dave_globals_changed())
 
-        # 阶段表
-        sf = ttk.LabelFrame(ed, text="流程阶段 (按顺序执行；杂交循环 = 每轮先跑 Kilroy 协议，再唤醒、成像)", padding=8)
+        # stage table
+        sf = ttk.LabelFrame(ed, text="Stages (run in order; each hyb round: Kilroy protocols → wakeup → imaging)", padding=8)
         sf.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         sf.columnconfigure(0, weight=1)
         sf.rowconfigure(0, weight=1)
-        cols = ("#", "类型", "轮次 / 流控协议", "唤醒对焦", "settings", "影片名", "帧数", "对焦")
+        cols = ("#", "Type", "Rounds / fluidics", "Wakeup focus", "settings", "Movie name", "Frames", "Focus")
         tf, self.dave_tree = make_tree(sf, cols, [30, 70, 190, 70, 230, 180, 45, 45], height=5,
                                        anchors=["center", "center", "w", "center", "w", "w", "center", "center"])
         tf.grid(row=0, column=0, sticky="nsew")
@@ -1536,42 +1551,42 @@ class App(tk.Tk):
         self.dv_wake_checks = V(value="50")
         e = ttk.Frame(sf)
         e.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        ttk.Label(e, text="类型").grid(row=0, column=0, sticky="w")
+        ttk.Label(e, text="Type").grid(row=0, column=0, sticky="w")
         ttk.Combobox(e, textvariable=self.dv_kind, values=list(DAVE_KINDS.values()), width=9,
                      state="readonly").grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(e, text="轮次").grid(row=0, column=2, sticky="e", padx=(10, 0))
+        ttk.Label(e, text="Rounds").grid(row=0, column=2, sticky="e", padx=(10, 0))
         rr = ttk.Frame(e)
         rr.grid(row=0, column=3, sticky="w", padx=4)
         ttk.Spinbox(rr, from_=1, to=99, textvariable=self.dv_from, width=4).pack(side="left")
-        ttk.Label(rr, text=" 到 ").pack(side="left")
+        ttk.Label(rr, text=" to ").pack(side="left")
         ttk.Spinbox(rr, from_=1, to=99, textvariable=self.dv_to, width=4).pack(side="left")
-        ttk.Label(e, text="每轮流控协议").grid(row=0, column=4, sticky="e", padx=(10, 0))
+        ttk.Label(e, text="Protocols per round").grid(row=0, column=4, sticky="e", padx=(10, 0))
         ttk.Entry(e, textvariable=self.dv_fmt, width=24).grid(row=0, column=5, columnspan=3, sticky="w", padx=4)
         ttk.Label(e, text="settings").grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.cb_dv_params = ttk.Combobox(e, textvariable=self.dv_params, width=40)
         self.cb_dv_params.grid(row=1, column=1, columnspan=3, sticky="w", padx=4, pady=(6, 0))
         self.cb_dv_params.bind("<<ComboboxSelected>>", lambda ev: self._dave_params_chosen())
-        ttk.Label(e, text="影片名").grid(row=1, column=4, sticky="e", padx=(10, 0), pady=(6, 0))
+        ttk.Label(e, text="Movie name").grid(row=1, column=4, sticky="e", padx=(10, 0), pady=(6, 0))
         ttk.Entry(e, textvariable=self.dv_movie, width=24).grid(row=1, column=5, columnspan=3, sticky="w", padx=4,
                                                                pady=(6, 0))
-        ttk.Label(e, text="帧数").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(e, text="Frames").grid(row=2, column=0, sticky="w", pady=(6, 0))
         nf = ttk.Frame(e)
         nf.grid(row=2, column=1, columnspan=3, sticky="w", padx=4, pady=(6, 0))
         ttk.Entry(nf, textvariable=self.dv_length, width=5).pack(side="left")
-        ttk.Label(nf, text="  对焦次数").pack(side="left")
+        ttk.Label(nf, text="  Focus checks").pack(side="left")
         ttk.Entry(nf, textvariable=self.dv_checks, width=5).pack(side="left", padx=4)
-        ttk.Checkbutton(nf, text="成像前唤醒，对焦次数", variable=self.dv_wake).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(nf, text="Wakeup first, focus checks", variable=self.dv_wake).pack(side="left", padx=(12, 0))
         ttk.Entry(nf, textvariable=self.dv_wake_checks, width=5).pack(side="left", padx=4)
-        ttk.Label(e, text="选择 settings 后会自动填写影片名和帧数；协议用逗号分隔，{n} 代表轮次号。",
+        ttk.Label(e, text="Choosing settings fills in movie name and frames. Protocols: comma-separated, {n} = round number.",
                   style="Hint.TLabel").grid(row=3, column=0, columnspan=8, sticky="w", pady=(6, 0))
         bb = ttk.Frame(sf)
         bb.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(bb, text="+ 添加阶段", command=self.dave_add).pack(side="left")
-        ttk.Button(bb, text="✎ 更新所选", command=self.dave_update).pack(side="left", padx=4)
-        ttk.Button(bb, text="✕ 删除", command=self.dave_delete).pack(side="left")
-        ttk.Button(bb, text="↑ 上移", command=lambda: self.dave_move(-1)).pack(side="left", padx=4)
-        ttk.Button(bb, text="↓ 下移", command=lambda: self.dave_move(1)).pack(side="left")
-        ttk.Button(bb, text="填入 ② 页当前 settings", command=self.dave_use_current).pack(side="left", padx=12)
+        ttk.Button(bb, text="+ Add stage", command=self.dave_add).pack(side="left")
+        ttk.Button(bb, text="✎ Update selected", command=self.dave_update).pack(side="left", padx=4)
+        ttk.Button(bb, text="✕ Delete", command=self.dave_delete).pack(side="left")
+        ttk.Button(bb, text="↑ Up", command=lambda: self.dave_move(-1)).pack(side="left", padx=4)
+        ttk.Button(bb, text="↓ Down", command=lambda: self.dave_move(1)).pack(side="left")
+        ttk.Button(bb, text="Use current settings (tab 2)", command=self.dave_use_current).pack(side="left", padx=12)
         self.lbl_dave_summary = ttk.Label(ed, text="", font=("TkDefaultFont", 11, "bold"))
         self.lbl_dave_summary.grid(row=2, column=0, sticky="w", pady=(8, 0))
         self.lbl_dave_problems = ttk.Label(ed, text="", style="Bad.TLabel", justify="left", wraplength=1000)
@@ -1606,7 +1621,7 @@ class App(tk.Tk):
         for i, st in enumerate(d.stages):
             if st["kind"] == "hyb":
                 pat = detect_round_pattern(st["values"])
-                rounds = f"{pat[1]}–{pat[2]}: {pat[0]}" if pat else f"自定义 {len(st['values'])} 轮"
+                rounds = f"{pat[1]}–{pat[2]}: {pat[0]}" if pat else f"Custom, {len(st['values'])} rounds"
             else:
                 rounds = "—"
             wake = f"✓ {st['wake_checks']}" if st["wake"] else "—"
@@ -1614,7 +1629,7 @@ class App(tk.Tk):
                                         st["length"], st["checks"]))
         tree_reselect(t, select)
         self.cb_dv_params.configure(values=self.known_settings_names())
-        name = os.path.basename(self.dave_path) if self.dave_path else "(未保存)"
+        name = os.path.basename(self.dave_path) if self.dave_path else "(unsaved)"
         self.lbl_dave.configure(text=name)
         self.refresh_dave_summary()
 
@@ -1647,9 +1662,9 @@ class App(tk.Tk):
                         else:
                             unknown = True
         n_rounds = sum(len(st["values"]) for st in d.stages if st["kind"] == "hyb")
-        txt = f"共 {len(d.stages)} 个阶段，{n_img} 次成像 (每次遍历所有位置)，{n_rounds} 轮杂交"
+        txt = f"{len(d.stages)} stages, {n_img} imaging passes (each over all positions), {n_rounds} hyb rounds"
         if n_rounds:
-            txt += f"；流控总时长约 {fmt_duration(fl)}" + (" (部分协议在 Kilroy 中找不到)" if unknown else "")
+            txt += f"; fluidics about {fmt_duration(fl)} in total" + (" (some protocols are not in Kilroy)" if unknown else "")
         self.lbl_dave_summary.configure(text=txt)
         probs = d.validate(self.kilroy, self.settings_frames)
         self.lbl_dave_problems.configure(text="\n".join("⚠ " + p for p in probs))
@@ -1663,7 +1678,7 @@ class App(tk.Tk):
         cur = os.path.splitext(self.settings_filename())[0]
         if cur not in names:
             names.insert(0, cur)
-        for folder in {self.last_dir, APP_DIR}:
+        for folder in settings_search_dirs(self.last_dir):
             try:
                 for fn in sorted(os.listdir(folder)):
                     stem = os.path.splitext(fn)[0]
@@ -1674,7 +1689,7 @@ class App(tk.Tk):
         return names
 
     def _file_frames(self, path):
-        """settings 文件里的 film/frames (缓存)。不是 settings 文件返回 None。"""
+        """film/frames from a settings file (cached). Returns None if it is not a settings file."""
         try:
             key = (path, os.path.getmtime(path))
         except OSError:
@@ -1691,13 +1706,13 @@ class App(tk.Tk):
         return self._film_frames_cache[key]
 
     def settings_frames(self, name):
-        """settings 名对应的帧数: ② 页当前设置 > 内置预设 > 文件夹中的文件。未知返回 None。"""
+        """Frames for a settings name: current tab-2 settings > built-in presets > files in the folder. None if unknown."""
         if name == os.path.splitext(self.settings_filename())[0]:
             return total_frames(self.steps)
         p = find_settings_preset(name)
         if p:
             return sum(n for _, n in p["steps"])
-        for folder in (self.last_dir, APP_DIR):
+        for folder in settings_search_dirs(self.last_dir):
             f = self._file_frames(os.path.join(folder, name + ".xml"))
             if f:
                 return f
@@ -1735,14 +1750,14 @@ class App(tk.Tk):
         kind = next(k for k, v in DAVE_KINDS.items() if v == self.dv_kind.get())
         params = self.dv_params.get().strip()
         if not params:
-            messagebox.showerror("输入错误", "请选择或填写 settings")
+            messagebox.showerror("Invalid input", "Choose or type a settings name")
             return None
         try:
             length = int(self.dv_length.get())
             if length < 1:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("输入错误", "帧数必须是 ≥1 的整数")
+            messagebox.showerror("Invalid input", "Frames must be an integer ≥ 1")
             return None
         st = {"kind": kind, "params": params, "movie": self.dv_movie.get().strip() or movie_name_for(params),
               "length": str(length), "checks": self.dv_checks.get().strip(),
@@ -1751,7 +1766,7 @@ class App(tk.Tk):
         if kind == "hyb":
             fmt = self.dv_fmt.get().strip()
             if not fmt and old and old.get("values"):
-                st["values"] = old["values"]  # 自定义轮次: 保持不变
+                st["values"] = old["values"]  # custom rounds: keep as they are
             else:
                 try:
                     a, b = int(self.dv_from.get()), int(self.dv_to.get())
@@ -1759,10 +1774,10 @@ class App(tk.Tk):
                         a, b = b, a
                     st["values"] = make_round_values(fmt, a, b)
                 except (ValueError, KeyError, IndexError):
-                    messagebox.showerror("输入错误", "请检查轮次号与流控协议格式 (用 {n} 表示轮次)")
+                    messagebox.showerror("Invalid input", "Check the round numbers and protocol format (use {n} for the round number)")
                     return None
                 if not st["values"] or not st["values"][0]:
-                    messagebox.showerror("输入错误", "每轮流控协议不能为空")
+                    messagebox.showerror("Invalid input", "Protocols per round cannot be empty")
                     return None
         return st
 
@@ -1777,7 +1792,7 @@ class App(tk.Tk):
     def dave_update(self):
         i = tree_index(self.dave_tree)
         if i is None:
-            messagebox.showinfo("提示", "请先在表格中选中一行")
+            messagebox.showinfo("Note", "Select a row in the table first")
             return
         st = self._read_dave_editor(self.dave.stages[i])
         if st:
@@ -1803,27 +1818,27 @@ class App(tk.Tk):
         self.dv_params.set(os.path.splitext(self.settings_filename())[0])
         self.dv_movie.set(self.v_film.get().strip())
         self.dv_length.set(str(total_frames(self.steps)))
-        self.status("已填入当前 settings；点「添加阶段」或「更新所选」应用到流程")
+        self.status("Filled in the current settings; click Add stage or Update selected to apply it")
 
     def choose_dave_preset(self):
         name = self.v_dave_preset.get()
         p = DAVE_PRESETS.get(name)
-        if not p or not messagebox.askyesno("载入流程预设", f"用预设「{name}」替换当前 Dave 流程?"):
+        if not p or not messagebox.askyesno("Load recipe preset", f"Replace the current Dave recipe with preset \"{name}\"?"):
             return
         self.push_quick()
         ctx = {"settings": os.path.splitext(self.settings_filename())[0], "movie": self.v_film.get().strip(),
                "frames": total_frames(self.steps)}
         self.dave = p["make"](ctx)
         self.dave_path = None
-        self.status(f"已载入流程预设: {name}")
+        self.status(f"Loaded recipe preset: {name}")
         kp = p.get("kilroy")
         if kp and kp in KILROY_PRESETS and messagebox.askyesno(
-                "配套流控", f"这个流程配套的流控预设是「{kp}」。\n\n同时把 ④ 页的 Kilroy 换成它?"):
+                "Matching fluidics", f"This recipe goes with the fluidics preset \"{kp}\".\n\nAlso switch the Kilroy protocols on tab 4 to it?"):
             self.apply_kilroy_preset(kp)
         self.refresh_dave(0)
 
     def open_dave(self):
-        path = filedialog.askopenfilename(initialdir=self.last_dir, title="打开 Dave 流程文件",
+        path = filedialog.askopenfilename(initialdir=self.last_dir, title="Open Dave recipe",
                                           filetypes=[("XML", "*.xml"), ("All", "*.*")])
         if path:
             self.load_dave(path)
@@ -1832,23 +1847,23 @@ class App(tk.Tk):
         try:
             d = DaveRecipe.load(path)
         except Exception as ex:
-            messagebox.showerror("读取失败", f"{os.path.basename(path)}\n\n{ex}\n\n"
-                                         f"本工具只支持「成像 + 杂交循环」结构的 Dave 流程。")
+            messagebox.showerror("Could not read file", f"{os.path.basename(path)}\n\n{ex}\n\n"
+                                         f"This tool supports Dave recipes made of imaging stages and hyb loops only.")
             return False
         self.dave = d
         self.dave_path = path
         self.v_dave_preset.set("")
         self.last_dir = os.path.dirname(path)
         self.refresh_dave(0)
-        self.status(f"已载入 Dave: {path}")
+        self.status(f"Loaded Dave: {path}")
         return True
 
     def check_dave(self):
         probs = self.dave.validate(self.kilroy, self.settings_frames)
         if probs:
-            messagebox.showwarning("检查结果", "\n".join("• " + p for p in probs))
+            messagebox.showwarning("Check results", "\n".join("• " + p for p in probs))
         else:
-            messagebox.showinfo("检查结果", "没有发现问题 ✓")
+            messagebox.showinfo("Check results", "No problems found ✓")
 
     def save_dave(self):
         if not self.dave_path:
@@ -1869,7 +1884,7 @@ class App(tk.Tk):
         self.dave_path = path
         self.last_dir = os.path.dirname(path)
         self.refresh_dave()
-        self.status(f"已保存 Dave: {path}")
+        self.status(f"Saved Dave: {path}")
 
     # ================================================================ tab sync
     def _on_tab_changed(self, _e=None):
@@ -1893,7 +1908,7 @@ class App(tk.Tk):
         if name in SEQUENCE_PRESETS:
             self.steps = [new_step(w, n) for w, n in SEQUENCE_PRESETS[name]]
             self.refresh_steps()
-            self.status(f"已应用预设: {name}")
+            self.status(f"Applied preset: {name}")
 
     def refresh_steps(self, select=None):
         t = self.step_tree
@@ -1915,7 +1930,7 @@ class App(tk.Tk):
             if frames < 1:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("输入错误", "帧数必须是 ≥1 的整数，功率必须是数字")
+            messagebox.showerror("Invalid input", "Frames must be an integer ≥ 1 and power must be a number")
             return None
         return new_step(self.v_step_wl.get(), frames, power)
 
@@ -1949,17 +1964,17 @@ class App(tk.Tk):
                     if key == "frames" and val < 1:
                         raise ValueError
                 except ValueError:
-                    messagebox.showerror("输入错误", f"无效的值: {v}")
+                    messagebox.showerror("Invalid input", f"Invalid value: {v}")
                     return
                 self.steps[i][key] = val
                 self.refresh_steps(i)
             return f
 
-        if col == "激光 Laser" or col == "通道 Ch":
-            inline_edit(self.step_tree, item, "激光 Laser", done_laser, values=[f"{w} nm" for _, w, _ in LASERS])
-        elif col == "帧数 Frames":
+        if col == "Laser" or col == "Channel":
+            inline_edit(self.step_tree, item, "Laser", done_laser, values=[f"{w} nm" for _, w, _ in LASERS])
+        elif col == "Frames":
             inline_edit(self.step_tree, item, col, done_num("frames", int))
-        elif col == "功率 Power":
+        elif col == "Power":
             inline_edit(self.step_tree, item, col, done_num("power", float))
 
     def step_add(self):
@@ -1971,7 +1986,7 @@ class App(tk.Tk):
     def step_update(self):
         i = tree_index(self.step_tree)
         if i is None:
-            messagebox.showinfo("提示", "请先在表格中选中一行")
+            messagebox.showinfo("Note", "Select a row in the table first")
             return
         s = self._read_step_editor()
         if s:
@@ -1998,7 +2013,7 @@ class App(tk.Tk):
         self.refresh_steps(0)
 
     def step_clear(self):
-        if self.steps and messagebox.askyesno("清空", "确定清空所有步骤?"):
+        if self.steps and messagebox.askyesno("Clear", "Remove all steps?"):
             self.steps = []
             self.refresh_steps()
 
@@ -2010,7 +2025,7 @@ class App(tk.Tk):
         self.update_derived()
 
     def current_z_values(self):
-        """当前 z_offsets (float 列表)，解析失败返回 None。"""
+        """Current z_offsets as a list of floats, or None if they cannot be parsed."""
         try:
             return parse_float_list(self.txt_z.get("1.0", "end"))
         except ValueError:
@@ -2057,24 +2072,24 @@ class App(tk.Tk):
             self.set_z_text(self.get_z_text())
         zv = self.current_z_values()
         if zv is None:
-            self.lbl_zcount.configure(text="z_offsets 格式错误 (应为逗号分隔的数字)", style="Bad.TLabel")
+            self.lbl_zcount.configure(text="Invalid z_offsets (expected comma-separated numbers)", style="Bad.TLabel")
         elif len(zv) == nfr:
-            self.lbl_zcount.configure(text=f"✓ z 数量 {len(zv)} = 总帧数 {nfr}", style="Good.TLabel")
+            self.lbl_zcount.configure(text=f"✓ {len(zv)} z values = {nfr} total frames", style="Good.TLabel")
         else:
-            self.lbl_zcount.configure(text=f"✗ z 数量 {len(zv)} ≠ 总帧数 {nfr}", style="Bad.TLabel")
+            self.lbl_zcount.configure(text=f"✗ {len(zv)} z values ≠ {nfr} total frames", style="Bad.TLabel")
 
         if self.v_auto_film.get():
             self.v_film.set(self.auto_film_name())
         exp = self._exposure()
-        tstr = f"，约 {nfr * exp:.1f} s / 视野" if exp else ""
-        self.v_seq_info.set(f"共 {len(self.steps)} 步，{nfr} 帧{tstr}")
-        self.v_names.set(f"shutters 文件: {shutters_filename(self.steps)}     settings 文件: {self.settings_filename()}")
+        tstr = f", about {nfr * exp:.1f} s per field of view" if exp else ""
+        self.v_seq_info.set(f"{len(self.steps)} steps, {nfr} frames{tstr}")
+        self.v_names.set(f"Shutters file: {shutters_filename(self.steps)}     Settings file: {self.settings_filename()}")
         if hasattr(self, "lbl_linked"):
             self.lbl_linked.configure(
-                text=f"以下参数由「① 拍摄序列」自动填写:\n"
+                text=f"Filled in automatically from tab 1 (Sequence):\n"
                      f"  illumination/shutters = {shutters_filename(self.steps)}\n"
-                     f"  film/frames = {nfr}      focuslock/hardware_z_scan/z_offsets = {len(zv or [])} 个值\n"
-                     f"  保存为: {self.settings_filename()}")
+                     f"  film/frames = {nfr}      focuslock/hardware_z_scan/z_offsets = {len(zv or [])} values\n"
+                     f"  Saved as: {self.settings_filename()}")
         self.draw_preview()
 
     def _exposure(self):
@@ -2096,7 +2111,7 @@ class App(tk.Tk):
         H = int(c["height"])
         n = total_frames(self.steps)
         if n == 0:
-            c.create_text(W / 2, H / 2, text="(没有步骤)", fill="#999")
+            c.create_text(W / 2, H / 2, text="(no steps)", fill="#999")
             return
         L, R = 46, 12
         bar_y0, bar_y1 = H - 34, H - 14
@@ -2137,7 +2152,7 @@ class App(tk.Tk):
 
     # ---- shutters file I/O
     def open_shutters(self):
-        path = filedialog.askopenfilename(initialdir=self.last_dir, title="打开 shutters 文件",
+        path = filedialog.askopenfilename(initialdir=self.last_dir, title="Open shutters file",
                                           filetypes=[("XML", "*.xml"), ("All", "*.*")])
         if path:
             self.load_shutters(path)
@@ -2146,15 +2161,15 @@ class App(tk.Tk):
         try:
             overs, steps, warns = parse_shutters(path)
         except Exception as ex:
-            messagebox.showerror("读取失败", f"{os.path.basename(path)}\n\n{ex}")
+            messagebox.showerror("Could not read file", f"{os.path.basename(path)}\n\n{ex}")
             return False
         self.last_dir = os.path.dirname(path)
         self.steps = steps
         self.oversampling.set(overs)
         self.refresh_steps()
-        self.status(f"已载入 shutters: {path}")
+        self.status(f"Loaded shutters: {path}")
         if warns and not quiet:
-            messagebox.showwarning("注意", "\n".join(warns))
+            messagebox.showwarning("Warning", "\n".join(warns))
         return True
 
     def save_shutters_as(self):
@@ -2165,11 +2180,11 @@ class App(tk.Tk):
         if path:
             write_text_crlf(path, shutters_to_string(self.steps, self.oversampling.get()))
             self.last_dir = os.path.dirname(path)
-            self.status(f"已保存 shutters: {path}")
+            self.status(f"Saved shutters: {path}")
 
     def _check_sequence(self):
         if not self.steps:
-            messagebox.showerror("错误", "拍摄序列为空")
+            messagebox.showerror("Error", "The sequence is empty")
             return False
         return True
 
@@ -2206,7 +2221,7 @@ class App(tk.Tk):
                                   if os.path.isabs(self.settings_source) else self.settings_source)
 
     def push_quick(self):
-        """把快速表单 + 序列派生值写回 settings 树。"""
+        """Write the quick form and the sequence-derived values back into the settings tree."""
         r = self.settings_root
         sset(r, "camera1/exposure_time", self.v_exposure.get().strip(), "float")
         bs = lambda v: "True" if v.get() else "False"
@@ -2228,7 +2243,7 @@ class App(tk.Tk):
             except ValueError:
                 pw.append(v.get().strip())
         sset(r, "illumination/default_power", ",".join(pw), "custom")
-        # 序列派生
+        # derived from the sequence
         sset(r, "illumination/shutters", shutters_filename(self.steps), "string")
         sset(r, "film/frames", str(total_frames(self.steps)), "int")
         sset(r, "film/filename", self.v_film.get().strip(), "string")
@@ -2238,29 +2253,29 @@ class App(tk.Tk):
         problems = []
         e = self._exposure()
         if not e or e <= 0:
-            problems.append("曝光时间无效")
+            problems.append("Invalid exposure time")
         for i, v in enumerate(self.v_power):
             try:
                 p = float(v.get())
                 if not 0 <= p <= 1:
-                    problems.append(f"{LASERS[i][1]} nm 功率 {p} 不在 0–1 之间")
+                    problems.append(f"{LASERS[i][1]} nm power {p} is not between 0 and 1")
             except ValueError:
-                problems.append(f"{LASERS[i][1]} nm 功率不是数字")
+                problems.append(f"{LASERS[i][1]} nm power is not a number")
         zv = self.current_z_values()
         if zv is None:
-            problems.append("z_offsets 格式错误")
+            problems.append("Invalid z_offsets")
         elif len(zv) != total_frames(self.steps):
-            problems.append(f"z_offsets 数量 ({len(zv)}) 与总帧数 ({total_frames(self.steps)}) 不一致")
+            problems.append(f"Number of z_offsets ({len(zv)}) does not match total frames ({total_frames(self.steps)})")
         if not self.v_film.get().strip():
-            problems.append("影片文件名为空")
+            problems.append("Movie name is empty")
         try:
             float(self.v_obj[self.v_objective.get()][1].get())
         except (ValueError, KeyError):
-            problems.append("当前物镜的 µm/pixel 不是数字")
+            problems.append("µm/pixel of the active objective is not a number")
         return problems
 
     def open_settings(self):
-        path = filedialog.askopenfilename(initialdir=self.last_dir, title="打开 settings 文件",
+        path = filedialog.askopenfilename(initialdir=self.last_dir, title="Open settings file",
                                           filetypes=[("XML", "*.xml"), ("All", "*.*")])
         if path:
             self.load_settings(path)
@@ -2269,10 +2284,10 @@ class App(tk.Tk):
         try:
             root = ET.parse(path).getroot()
             if root.tag != "settings":
-                raise ValueError(f"根节点是 <{root.tag}>，不是 <settings>。\n"
-                                 f"如果这是 shutters 文件，请在「①」页用「打开 shutters」。")
+                raise ValueError(f"Root element is <{root.tag}>, not <settings>.\n"
+                                 f"If this is a shutters file, use Open shutters on tab 1.")
         except Exception as ex:
-            messagebox.showerror("读取失败", f"{os.path.basename(path)}\n\n{ex}")
+            messagebox.showerror("Could not read file", f"{os.path.basename(path)}\n\n{ex}")
             return
         self.last_dir = os.path.dirname(path)
         self.settings_root = root
@@ -2281,16 +2296,16 @@ class App(tk.Tk):
         prefix, tag = split_settings_name(os.path.splitext(os.path.basename(path))[0])
         self.v_prefix.set(prefix)
         self.v_tag.set(tag)
-        # 关联的 shutters 文件
+        # linked shutters file
         sh = sget(root, "illumination/shutters").strip()
         sh_path = os.path.join(os.path.dirname(path), sh) if sh else ""
         if sh and os.path.exists(sh_path):
             self.load_shutters(sh_path, quiet=True)
-            notes.append(f"已同时载入关联的 shutters 文件: {sh}")
+            notes.append(f"Also loaded the linked shutters file: {sh}")
         elif sh:
-            notes.append(f"未找到关联的 shutters 文件 {sh}，拍摄序列保持不变")
+            notes.append(f"Linked shutters file {sh} not found; the sequence was left unchanged")
         self.pull_quick()
-        # z offsets: 能推断就自动，否则保留原文
+        # z offsets: auto if the rule can be inferred, else keep the text
         ztxt = sget(root, "focuslock/hardware_z_scan/z_offsets")
         try:
             zv = parse_float_list(ztxt)
@@ -2306,8 +2321,8 @@ class App(tk.Tk):
         else:
             self.v_auto_z.set(False)
             self.set_z_text(ztxt)
-            notes.append("z_offsets 与自动规则不一致，已关闭自动生成并保留原值")
-        # 影片名
+            notes.append("z_offsets do not match the auto rule, so auto-generate was turned off and the original values were kept")
+        # movie name
         film = sget(root, "film/filename")
         self.v_tag_in_film.set(bool(tag) and film.endswith("-" + tag))
         if film == self.auto_film_name():
@@ -2318,14 +2333,14 @@ class App(tk.Tk):
         self._on_auto_film()
         self._on_auto_z()
         self.refresh_steps()
-        self.status(f"已载入 settings: {path}")
+        self.status(f"Loaded settings: {path}")
         if notes:
-            messagebox.showinfo("已载入", "\n".join(notes))
+            messagebox.showinfo("Loaded", "\n".join(notes))
 
     def choose_settings_preset(self):
         label = self.v_settings_preset.get()
         p = next((x for x in SETTINGS_PRESETS if preset_label(x) == label), None)
-        if p and messagebox.askyesno("载入预设", f"载入预设「{p['name']}」?\n\n这会替换当前的拍摄序列和 settings 参数。"):
+        if p and messagebox.askyesno("Load preset", f"Load preset \"{p['name']}\"?\n\nThis replaces the current sequence and settings."):
             self.apply_settings_preset(p)
 
     def apply_settings_preset(self, p):
@@ -2333,7 +2348,7 @@ class App(tk.Tk):
         for path, val in p["set"].items():
             sset(root, path, val)
         self.settings_root = root
-        self.settings_source = f"预设 {preset_label(p)}"
+        self.settings_source = f"Preset {preset_label(p)}"
         self.steps = [new_step(w, n) for w, n in p["steps"]]
         self.oversampling.set(1)
         prefix, tag = split_settings_name(p["name"])
@@ -2350,19 +2365,19 @@ class App(tk.Tk):
         self._on_auto_film()
         self._on_auto_z()
         self.refresh_steps()
-        self.status(f"已载入预设: {preset_label(p)}")
+        self.status(f"Loaded preset: {preset_label(p)}")
 
     def reset_settings(self):
-        if messagebox.askyesno("恢复", "用内置模板替换当前 settings 参数? (拍摄序列不变)"):
+        if messagebox.askyesno("Reset", "Replace the current settings with the built-in template? (The sequence is kept.)"):
             self.settings_root = settings_from_string(DEFAULT_SETTINGS_XML)
-            self.settings_source = "内置默认模板 (Dsk-650s10-560s10-488s10-405s10-U2OS)"
+            self.settings_source = "Built-in default template (Dsk-650s10-560s10-488s10-405s10-U2OS)"
             self.pull_quick()
             self.update_derived()
 
     def _confirm_problems(self, problems):
         if not problems:
             return True
-        return messagebox.askyesno("发现问题", "\n".join("• " + p for p in problems) + "\n\n仍然保存?")
+        return messagebox.askyesno("Problems found", "\n".join("• " + p for p in problems) + "\n\nSave anyway?")
 
     def save_settings_as(self):
         if not self._check_sequence() or not self._confirm_problems(self.validate_settings()):
@@ -2373,25 +2388,25 @@ class App(tk.Tk):
             self.push_quick()
             write_text_crlf(path, settings_to_string(self.settings_root))
             self.last_dir = os.path.dirname(path)
-            self.status(f"已保存 settings: {path}")
+            self.status(f"Saved settings: {path}")
 
     def export_both(self):
         if not self._check_sequence() or not self._confirm_problems(self.validate_settings()):
             return
-        folder = filedialog.askdirectory(initialdir=self.last_dir, title="选择导出文件夹")
+        folder = filedialog.askdirectory(initialdir=self.last_dir, title="Choose export folder")
         if not folder:
             return
         self.push_quick()
         files = {shutters_filename(self.steps): shutters_to_string(self.steps, self.oversampling.get()),
                  self.settings_filename(): settings_to_string(self.settings_root)}
         exist = [n for n in files if os.path.exists(os.path.join(folder, n))]
-        if exist and not messagebox.askyesno("覆盖确认", "以下文件已存在，覆盖?\n\n" + "\n".join(exist)):
+        if exist and not messagebox.askyesno("Confirm overwrite", "These files already exist. Overwrite?\n\n" + "\n".join(exist)):
             return
         for n, txt in files.items():
             write_text_crlf(os.path.join(folder, n), txt)
         self.last_dir = folder
-        self.status(f"已导出到 {folder}")
-        messagebox.showinfo("导出完成", f"已写入 {folder}:\n\n" + "\n".join(files))
+        self.status(f"Exported to {folder}")
+        messagebox.showinfo("Export complete", f"Wrote to {folder}:\n\n" + "\n".join(files))
 
     # ================================================================ tab 3 logic
     def refresh_adv(self):
@@ -2433,17 +2448,17 @@ class App(tk.Tk):
                 elif typ == "float":
                     float(v)
             except ValueError:
-                messagebox.showerror("类型错误", f"{el.tag} 需要 {typ}，输入为: {v}")
+                messagebox.showerror("Type error", f"{el.tag} needs a {typ}, got: {v}")
                 return
             el.text = v
             self.adv_tree.set(item, "value", v)
-            self.status(f"已修改 {el.tag} = {v}")
+            self.status(f"Changed {el.tag} = {v}")
 
         inline_edit(self.adv_tree, item, "value", done, values=values)
 
     # ================================================================ tab 4 logic
     def open_kilroy(self):
-        path = filedialog.askopenfilename(initialdir=self.last_dir, title="打开 Kilroy 协议文件",
+        path = filedialog.askopenfilename(initialdir=self.last_dir, title="Open Kilroy protocol file",
                                           filetypes=[("XML", "*.xml"), ("All", "*.*")])
         if path:
             self.load_kilroy(path)
@@ -2452,17 +2467,17 @@ class App(tk.Tk):
         try:
             k = KilroyConfig.load(path)
         except Exception as ex:
-            if quiet:  # 启动时: 用内置预设代替
+            if quiet:  # at startup: fall back to the built-in preset
                 self.apply_kilroy_preset(next(iter(KILROY_PRESETS)))
-            else:      # 手动打开失败: 保留当前内容
-                messagebox.showerror("读取失败", f"{os.path.basename(path)}\n\n{ex}")
+            else:      # opened by hand: keep the current content
+                messagebox.showerror("Could not read file", f"{os.path.basename(path)}\n\n{ex}")
             return
         self.kilroy = k
         self.kilroy_path = path
         self.kilroy_preset_name = None
         self.v_kilroy_preset.set("")
         self.refresh_kilroy_all()
-        self.status(f"已载入 Kilroy: {path}")
+        self.status(f"Loaded Kilroy: {path}")
 
     def save_kilroy(self):
         if not self.kilroy_path:
@@ -2472,7 +2487,7 @@ class App(tk.Tk):
     def choose_kilroy_preset(self):
         name = self.v_kilroy_preset.get()
         if name in KILROY_PRESETS and messagebox.askyesno(
-                "载入流控预设", f"用预设「{name}」替换当前 Kilroy 协议?\n\n(不会改动磁盘上的文件，保存时再选位置。)"):
+                "Load fluidics preset", f"Replace the current Kilroy protocols with preset \"{name}\"?\n\n(Files on disk are not changed; you choose where to save.)"):
             self.apply_kilroy_preset(name)
 
     def apply_kilroy_preset(self, name):
@@ -2482,7 +2497,7 @@ class App(tk.Tk):
         self.kilroy_preset_name = name
         self.v_kilroy_preset.set(name)
         self.refresh_kilroy_all()
-        self.status(f"已载入流控预设: {name}")
+        self.status(f"Loaded fluidics preset: {name}")
 
     def save_kilroy_as(self):
         init = (os.path.basename(self.kilroy_path) if self.kilroy_path
@@ -2498,26 +2513,26 @@ class App(tk.Tk):
         write_text_crlf(path, self.kilroy.to_string())
         self.kilroy_path = path
         self.refresh_kilroy_label()
-        self.status(f"已保存 Kilroy: {path}")
+        self.status(f"Saved Kilroy: {path}")
 
     def check_kilroy(self):
         probs = self.kilroy.validate()
         if probs:
-            messagebox.showwarning("检查结果", "\n".join("• " + p for p in probs[:40]) +
-                                   (f"\n… 共 {len(probs)} 条" if len(probs) > 40 else ""))
+            messagebox.showwarning("Check results", "\n".join("• " + p for p in probs[:40]) +
+                                   (f"\n… {len(probs)} in total" if len(probs) > 40 else ""))
         else:
-            messagebox.showinfo("检查结果", "没有发现问题 ✓")
+            messagebox.showinfo("Check results", "No problems found ✓")
 
     def refresh_kilroy_label(self):
         k = self.kilroy
         if self.kilroy_path:
             name = os.path.basename(self.kilroy_path)
         elif getattr(self, "kilroy_preset_name", None):
-            name = f"预设 {self.kilroy_preset_name} (未保存)"
+            name = f"Preset {self.kilroy_preset_name} (unsaved)"
         else:
-            name = "(未保存的新文件)"
-        self.lbl_kilroy.configure(text=f"{name}    —   {len(k.protocols)} 个协议, {len(k.valves)} 个阀门命令, "
-                                       f"{len(k.pumps)} 个泵命令, {k.num_valves} 个阀门")
+            name = "(new, unsaved file)"
+        self.lbl_kilroy.configure(text=f"{name}  —  {len(k.protocols)} protocols · {len(k.valves)} valve cmds · "
+                                       f"{len(k.pumps)} pump cmds · {k.num_valves} valves")
 
     def refresh_kilroy_all(self):
         self.refresh_kilroy_label()
@@ -2565,7 +2580,7 @@ class App(tk.Tk):
                 tt += float(dur)
             except ValueError:
                 pass
-        self.lbl_proto_total.configure(text=f"「{name}」总时长 {fmt_duration(tt)}")
+        self.lbl_proto_total.configure(text=f"\"{name}\" total duration {fmt_duration(tt)}")
         tree_reselect(t, select)
 
     def _update_proto_label(self):
@@ -2586,11 +2601,11 @@ class App(tk.Tk):
         return f"{base} ({k})"
 
     def proto_new(self):
-        name = simpledialog.askstring("新建协议", "协议名称:", parent=self)
+        name = simpledialog.askstring("New protocol", "Protocol name:", parent=self)
         if not name:
             return
         if name in [p[0] for p in self.kilroy.protocols]:
-            messagebox.showerror("错误", "已存在同名协议")
+            messagebox.showerror("Error", "A protocol with that name already exists")
             return
         i = self._proto_idx()
         pos = len(self.kilroy.protocols) if i is None else i + 1
@@ -2613,10 +2628,10 @@ class App(tk.Tk):
         if i is None:
             return
         old = self.kilroy.protocols[i][0]
-        name = simpledialog.askstring("重命名协议", "新名称:", initialvalue=old, parent=self)
+        name = simpledialog.askstring("Rename protocol", "New name:", initialvalue=old, parent=self)
         if name and name != old:
             if name in [p[0] for p in self.kilroy.protocols]:
-                messagebox.showerror("错误", "已存在同名协议")
+                messagebox.showerror("Error", "A protocol with that name already exists")
                 return
             self.kilroy.protocols[i][0] = name
             self.refresh_proto_list(i)
@@ -2625,7 +2640,7 @@ class App(tk.Tk):
         i = self._proto_idx()
         if i is None:
             return
-        if messagebox.askyesno("删除", f"删除协议「{self.kilroy.protocols[i][0]}」?"):
+        if messagebox.askyesno("Delete", f"Delete protocol \"{self.kilroy.protocols[i][0]}\"?"):
             del self.kilroy.protocols[i]
             self.refresh_proto_list(i)
             self.refresh_kilroy_label()
@@ -2648,7 +2663,7 @@ class App(tk.Tk):
     def pstep_add(self, tag):
         steps = self._cur_steps()
         if steps is None:
-            messagebox.showinfo("提示", "请先选择或新建一个协议")
+            messagebox.showinfo("Note", "Select or create a protocol first")
             return
         names = self._cmd_names(tag)
         j = tree_index(self.pstep_tree)
@@ -2701,7 +2716,7 @@ class App(tk.Tk):
                     try:
                         float(v)
                     except ValueError:
-                        messagebox.showerror("输入错误", "时长必须是数字 (秒)")
+                        messagebox.showerror("Invalid input", "Duration must be a number (seconds)")
                         return
                 if field == 0:
                     if v not in ("valve", "pump"):
@@ -2714,11 +2729,11 @@ class App(tk.Tk):
                 self._update_proto_label()
             return f
 
-        if col == "类型":
+        if col == "Type":
             inline_edit(t, item, col, done(0), values=["valve", "pump"])
-        elif col == "时长 (s)":
+        elif col == "Duration (s)":
             inline_edit(t, item, col, done(1))
-        elif col == "命令":
+        elif col == "Command":
             inline_edit(t, item, col, done(2), values=self._cmd_names(step[0]))
 
     # ---- valves
@@ -2728,7 +2743,7 @@ class App(tk.Tk):
                 select = tree_index(self.valve_tree)
             self.valve_tree.master.destroy()
         n = self.kilroy.num_valves
-        cols = ("名称",) + tuple(f"阀门 {v}" for v in range(1, n + 1))
+        cols = ("Name",) + tuple(f"Valve {v}" for v in range(1, n + 1))
         fr, self.valve_tree = make_tree(self.valve_frame, cols, [220] + [80] * n, height=16,
                                         anchors=["w"] + ["center"] * n)
         fr.grid(row=0, column=0, sticky="nsew")
@@ -2758,7 +2773,7 @@ class App(tk.Tk):
                 self.refresh_valves(j)
                 self.refresh_proto_steps(tree_index(self.pstep_tree))
                 if cnt:
-                    self.status(f"已重命名 '{old}' → '{v}'，并更新了 {cnt} 处协议引用")
+                    self.status(f"Renamed '{old}' → '{v}' and updated {cnt} protocol references")
             inline_edit(t, item, col, done)
         else:
             vid = ci
@@ -2770,7 +2785,7 @@ class App(tk.Tk):
                 elif v.isdigit():
                     entry[1][vid] = v
                 else:
-                    messagebox.showerror("输入错误", "端口号必须是整数")
+                    messagebox.showerror("Invalid input", "Port must be an integer")
                     return
                 self.refresh_valves(j)
             inline_edit(t, item, col, done, values=[str(p) for p in range(1, 11)])
@@ -2785,11 +2800,11 @@ class App(tk.Tk):
         return cnt
 
     def valve_new(self):
-        name = simpledialog.askstring("新建阀门命令", "名称 (如 Set Hyb 17):", parent=self)
+        name = simpledialog.askstring("New valve command", "Name (e.g. Set Hyb 17):", parent=self)
         if not name:
             return
         if name in [v[0] for v in self.kilroy.valves]:
-            messagebox.showerror("错误", "已存在同名命令")
+            messagebox.showerror("Error", "A command with that name already exists")
             return
         n = self.kilroy.num_valves
         j = tree_index(self.valve_tree)
@@ -2814,8 +2829,8 @@ class App(tk.Tk):
             return
         name = self.kilroy.valves[j][0]
         used = sum(1 for _, st in self.kilroy.protocols for s in st if s[0] == "valve" and s[2] == name)
-        msg = f"删除阀门命令「{name}」?" + (f"\n\n注意: 有 {used} 个协议步骤引用了它!" if used else "")
-        if messagebox.askyesno("删除", msg):
+        msg = f"Delete valve command \"{name}\"?" + (f"\n\nWarning: {used} protocol steps use it!" if used else "")
+        if messagebox.askyesno("Delete", msg):
             del self.kilroy.valves[j]
             self.refresh_valves(j)
             self.refresh_kilroy_label()
@@ -2829,7 +2844,7 @@ class App(tk.Tk):
         self.refresh_valves(j + d)
 
     def valve_set_count(self):
-        n = simpledialog.askinteger("阀门数量", "阀门数量 num_valves:", initialvalue=self.kilroy.num_valves,
+        n = simpledialog.askinteger("Number of valves", "Number of valves (num_valves):", initialvalue=self.kilroy.num_valves,
                                     minvalue=1, maxvalue=20, parent=self)
         if not n:
             return
@@ -2876,7 +2891,7 @@ class App(tk.Tk):
                 try:
                     float(v)
                 except ValueError:
-                    messagebox.showerror("输入错误", "speed 必须是数字")
+                    messagebox.showerror("Invalid input", "Speed must be a number")
                     return
                 entry[1]["speed"] = v
             else:
@@ -2889,7 +2904,7 @@ class App(tk.Tk):
         inline_edit(t, item, col, done, values=["Forward", "Reverse", ""] if ci == 2 else None)
 
     def pump_new(self):
-        name = simpledialog.askstring("新建泵命令", "名称 (如 Flow 1.5 ml/min):", parent=self)
+        name = simpledialog.askstring("New pump command", "Name (e.g. Flow 1.5 ml/min):", parent=self)
         if not name or name in [p[0] for p in self.kilroy.pumps]:
             return
         self.kilroy.pumps.append([name, {"speed": "0.0", "direction": "Forward"}])
@@ -2901,7 +2916,7 @@ class App(tk.Tk):
         if j is None:
             return
         name = self.kilroy.pumps[j][0]
-        if messagebox.askyesno("删除", f"删除泵命令「{name}」?"):
+        if messagebox.askyesno("Delete", f"Delete pump command \"{name}\"?"):
             del self.kilroy.pumps[j]
             self.refresh_pumps(j)
             self.refresh_kilroy_label()
@@ -2915,28 +2930,28 @@ class App(tk.Tk):
             pfmt, vfmt = self.g_proto_fmt.get(), self.g_valve_fmt.get()
             pfmt.format(n=1), vfmt.format(n=1)
         except (ValueError, KeyError, IndexError):
-            messagebox.showerror("输入错误", "请检查轮次号与格式 (格式中用 {n} 表示轮次)")
+            messagebox.showerror("Invalid input", "Check the round numbers and formats (use {n} for the round number)")
             return
         if b < a:
             a, b = b, a
         tmpl = next((p for p in k.protocols if p[0] == self.g_template.get()), None)
         if tmpl is None:
-            messagebox.showerror("错误", "请选择模板协议")
+            messagebox.showerror("Error", "Choose a template protocol")
             return
         tvalve = vfmt.format(n=tn)
         if not any(s[0] == "valve" and s[2] == tvalve for s in tmpl[1]):
-            messagebox.showerror("错误", f"模板协议「{tmpl[0]}」中没有找到阀门命令「{tvalve}」")
+            messagebox.showerror("Error", f"Template protocol \"{tmpl[0]}\" has no valve command \"{tvalve}\"")
             return
         names = [p[0] for p in k.protocols]
         to_overwrite = [pfmt.format(n=n) for n in range(a, b + 1) if pfmt.format(n=n) in names]
         vnames = {v[0] for v in k.valves}
         missing = [vfmt.format(n=n) for n in range(a, b + 1) if vfmt.format(n=n) not in vnames]
-        msg = f"将生成 {b - a + 1} 个协议: {pfmt.format(n=a)} … {pfmt.format(n=b)}"
+        msg = f"This will create {b - a + 1} protocols: {pfmt.format(n=a)} … {pfmt.format(n=b)}"
         if to_overwrite:
-            msg += f"\n\n其中 {len(to_overwrite)} 个已存在，将被覆盖。"
+            msg += f"\n\n{len(to_overwrite)} of them already exist and will be overwritten."
         if missing:
-            msg += f"\n\n⚠ 以下阀门命令尚未定义，请到「阀门命令」页添加:\n" + ", ".join(missing)
-        if not messagebox.askyesno("确认生成", msg):
+            msg += f"\n\n⚠ These valve commands are not defined yet; add them on the Valve commands tab:\n" + ", ".join(missing)
+        if not messagebox.askyesno("Confirm", msg):
             return
         tmpl_steps = copy.deepcopy(tmpl[1])
         insert_at = None
@@ -2949,7 +2964,7 @@ class App(tk.Tk):
                 insert_at = idx + 1
             else:
                 if insert_at is None:
-                    # 放在最后一个同格式协议之后
+                    # insert after the last protocol with the same name format
                     pat = re.compile("^" + re.escape(pfmt).replace(re.escape("{n}"), r"\d+") + "$")
                     hits = [i for i, p in enumerate(k.protocols) if pat.match(p[0])]
                     insert_at = (hits[-1] + 1) if hits else len(k.protocols)
@@ -2957,7 +2972,7 @@ class App(tk.Tk):
                 insert_at += 1
         self.refresh_proto_list()
         self.refresh_kilroy_label()
-        self.status(f"已生成 {pfmt.format(n=a)} … {pfmt.format(n=b)}")
+        self.status(f"Generated {pfmt.format(n=a)} … {pfmt.format(n=b)}")
 
     def generate_prime(self):
         k = self.kilroy
@@ -2968,7 +2983,7 @@ class App(tk.Tk):
             ed = fmt_num(float(self.g_prime_extra_dur.get()))
             ld = fmt_num(float(self.g_prime_last_dur.get()))
         except ValueError:
-            messagebox.showerror("输入错误", "请检查数字")
+            messagebox.showerror("Invalid input", "Check the numbers")
             return
         extras = [x.strip() for x in self.g_prime_extra.get().split(",") if x.strip()]
         steps = [["pump", pd, self.g_prime_pump.get()]]
@@ -2982,7 +2997,7 @@ class App(tk.Tk):
         name = f"Prime {n} + {len(extras) + (1 if self.g_prime_last.get().strip() else 0)}"
         idx = next((i for i, p in enumerate(k.protocols) if p[0] == name), None)
         if idx is not None:
-            if not messagebox.askyesno("覆盖", f"协议「{name}」已存在，覆盖?"):
+            if not messagebox.askyesno("Overwrite", f"Protocol \"{name}\" already exists. Overwrite?"):
                 return
             k.protocols[idx][1] = steps
         else:
@@ -2991,7 +3006,7 @@ class App(tk.Tk):
             k.protocols.insert(idx, [name, steps])
         self.refresh_proto_list(idx)
         self.refresh_kilroy_label()
-        self.status(f"已生成协议「{name}」({fmt_duration(k.protocol_seconds(steps))})")
+        self.status(f"Generated protocol \"{name}\" ({fmt_duration(k.protocol_seconds(steps))})")
 
 
 def main():
