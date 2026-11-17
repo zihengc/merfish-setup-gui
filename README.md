@@ -77,5 +77,9 @@ The GUI tests open a real window, so they run only with `MERFISH_GUI_TESTS=1`. T
 The Python that ships with macOS (`/usr/bin/python3`) includes a Tk 8.5 that hangs instead of opening windows. Use a Python with Tk 8.6 instead, from python.org, Homebrew (`brew install python-tk@3.13`, then run with `python3.13`), or a conda/mamba environment:
 
 ```
-mamba activate cellpose && python app/merfish_setup_gui.py
+mamba create -n merfish python=3.12 tk
+mamba activate merfish
+python app/merfish_setup_gui.py
 ```
+
+Any existing conda/mamba environment with Python 3.9+ works too; activate it instead of creating `merfish`.
