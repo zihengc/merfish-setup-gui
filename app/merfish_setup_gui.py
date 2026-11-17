@@ -436,6 +436,10 @@ def preset_label(p):
     return f"{p['group']} · {p['name']}"
 
 
+# Settings preset loaded when the app opens: a lab file that uses all 5 lasers
+STARTUP_SETTINGS_PRESET = "Epi-405s1-750s10-650s10-560s10-488s10-405s10-U2OS"
+
+
 def find_settings_preset(name):
     return next((p for p in SETTINGS_PRESETS if p["name"] == name), None)
 
@@ -1008,6 +1012,10 @@ class App(tk.Tk):
         self._build_ui()
         self.pull_quick()
         self.refresh_steps()
+        start = find_settings_preset(STARTUP_SETTINGS_PRESET)
+        if start:
+            self.apply_settings_preset(start)
+            self.v_settings_preset.set(preset_label(start))
         self.v_dave_preset.set(next(iter(DAVE_PRESETS)))  # this is the recipe loaded at startup
         self.refresh_dave()
 

@@ -67,6 +67,8 @@ The app keeps the linked fields consistent: `illumination/shutters`, `film/frame
 
 Loading a settings preset and exporting gives files identical to the ones in `lab_files/hal/`. The one exception is the U2OS hyb settings' out-of-date `film/filename` (`Epi-405s1-750s10-…`), which is replaced with the correct name. Dave sets the movie name itself, so the old value doesn't affect runs. The Kilroy presets are generated from the lab's valve wiring and protocol templates, and they reproduce the original files exactly. Presets never change files on disk until you save.
 
+The app opens with the lab's `Epi-405s1-750s10-650s10-560s10-488s10-405s10-U2OS`, which uses all 5 lasers (`STARTUP_SETTINGS_PRESET` in the app). The Dsk / Epi prefix only changes the file and movie names; the settings themselves don't select the light path.
+
 To add a preset, add an entry to `SETTINGS_PRESETS`, `KILROY_PRESETS` or `DAVE_PRESETS` in `app/merfish_setup_gui.py`.
 
 ## File-format details

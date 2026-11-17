@@ -101,6 +101,11 @@ class SettingsTests(unittest.TestCase):
                 sh = ET.parse(os.path.join(HAL, M.shutters_filename(steps))).getroot()
                 self.assertEqual(norm(ET.fromstring(M.shutters_to_string(steps))), norm(sh))
 
+    def test_startup_preset_uses_every_laser(self):
+        p = M.find_settings_preset(M.STARTUP_SETTINGS_PRESET)
+        self.assertIsNotNone(p)
+        self.assertEqual({w for w, _ in p["steps"]}, {w for _, w, _ in M.LASERS})
+
 
 class KilroyTests(unittest.TestCase):
     def test_round_trip(self):
@@ -170,6 +175,7 @@ class GuiTests(unittest.TestCase):
         messagebox.showinfo = messagebox.showwarning = messagebox.showerror = lambda *a, **k: None
         cls.app = M.App()
         cls.app.update()
+        cls.startup = (cls.app.settings_filename(), {st["channel"] for st in cls.app.steps})
 
     @classmethod
     def tearDownClass(cls):
@@ -177,6 +183,9 @@ class GuiTests(unittest.TestCase):
         from tkinter import messagebox
         for k, v in cls._saved.items():
             setattr(messagebox, k, v)
+
+    def test_startup_shows_every_channel(self):
+        self.assertEqual(self.startup, (M.STARTUP_SETTINGS_PRESET + ".xml", {c for c, _, _ in M.LASERS}))
 
     def test_load_settings_and_save_unchanged(self):
         for path in settings_files(HAL):
