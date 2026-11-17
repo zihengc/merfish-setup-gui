@@ -20,8 +20,7 @@ import merfish_setup_gui as M  # noqa: E402
 HAL = os.path.join(REPO, "lab_files", "hal")
 KILROY = os.path.join(REPO, "lab_files", "kilroy", "kilroy_protocol_MERFISH_lab.xml")
 DAVE = os.path.join(REPO, "lab_files", "dave")
-# Optional: the U2OS hyb original folder, kept locally (not in the repo); only his Kilroy file is tested from it
-U2OS_HYB = os.path.join(REPO, "reference")
+KILROY_U2OS_HYB = os.path.join(REPO, "lab_files", "kilroy", "kilroy_protocol_MERFISH_U2OS_hyb.xml")
 
 
 def norm(el):
@@ -96,7 +95,7 @@ class SettingsTests(unittest.TestCase):
             with self.subTest(p["name"]):
                 root, steps = build_preset_settings(p)
                 orig = ET.parse(os.path.join(HAL, p["name"] + ".xml")).getroot()
-                if p["group"] == "U2OS hyb":  # his film/filename is out of date; the preset corrects it
+                if p["group"] == "U2OS hyb":  # the original film/filename is out of date; the preset corrects it
                     M.sset(orig, "film/filename", M.sget(root, "film/filename"))
                 self.assertEqual(norm(root), norm(orig))
                 sh = ET.parse(os.path.join(HAL, M.shutters_filename(steps))).getroot()
@@ -113,11 +112,9 @@ class KilroyTests(unittest.TestCase):
         preset = M.KILROY_PRESETS["Lab · kilroy_protocol_MERFISH_lab"]["make"]()
         self.assertEqual(preset.to_string(), M.KilroyConfig.load(KILROY).to_string())
 
-    @unittest.skipUnless(os.path.isdir(U2OS_HYB), "reference/ folder not present")
     def test_u2os_hyb_preset_matches_file(self):
         preset = M.KILROY_PRESETS["U2OS hyb · longer flow times"]["make"]()
-        path = os.path.join(U2OS_HYB, "kilroy_protocol_MERFISH_lab.xml")
-        self.assertEqual(preset.to_string(), M.KilroyConfig.load(path).to_string())
+        self.assertEqual(preset.to_string(), M.KilroyConfig.load(KILROY_U2OS_HYB).to_string())
 
 
 class DaveTests(unittest.TestCase):

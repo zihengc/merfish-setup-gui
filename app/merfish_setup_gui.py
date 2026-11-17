@@ -887,7 +887,7 @@ def dave_template(ctx, n_rounds):
 
 # make(ctx) -> DaveRecipe; kilroy = matching Kilroy preset (optional)
 DAVE_PRESETS = {
-    "U2OS hyb · U2OS 1 imaging round + 14 hyb rounds": {"make": lambda ctx: dave_preset_u2os_hyb(),
+    "U2OS hyb · 1 imaging round + 14 hyb rounds": {"make": lambda ctx: dave_preset_u2os_hyb(),
                                        "kilroy": "U2OS hyb · longer flow times"},
     "Template · 1 imaging round + 14 hyb rounds (current settings)": {"make": lambda ctx: dave_template(ctx, 14),
                                              "kilroy": None},

@@ -26,7 +26,7 @@ app/
   merfish_setup_gui.py     the app (single file)
 lab_files/
   hal/                     HAL settings and the shutters files they reference
-  kilroy/                  the lab's Kilroy protocol file (loaded at startup)
+  kilroy/                  Kilroy protocol files (the lab's standard one loads at startup)
   dave/                    Dave recipes
 tests/
   test_merfish_setup.py    round-trip and preset tests
@@ -37,7 +37,7 @@ HAL settings and their shutters files sit in the same folder on purpose. A setti
 What's in `lab_files/`:
 
 - **Lab:** 4 settings (`Dsk-650s10-…`, `Dsk-750s1-…-cell`, `Epi-405s1-750s10-…` ×2) with their shutters files, and `kilroy_protocol_MERFISH_lab.xml`.
-- **U2OS hyb:** `Dsk-405s1-750s6-650s6-405s6-U2OS` and `Dsk-405s1-750s6-650s6-560s6-U2OS` with their shutters files, and the Dave recipe `dave_recipe_U2OS_1round+14rounds.xml`. The recipe uses those two settings. His Kilroy file isn't included because it has the same name as the lab's; use the **U2OS hyb · longer flow times** fluidics preset instead, which reproduces it exactly.
+- **U2OS hyb run:** `Dsk-405s1-750s6-650s6-405s6-U2OS` and `Dsk-405s1-750s6-650s6-560s6-U2OS` with their shutters files, the Dave recipe `dave_recipe_U2OS_1round+14rounds.xml` that uses them, and `kilroy_protocol_MERFISH_U2OS_hyb.xml` (longer flow and wait times). Kilroy may expect the file to be called `kilroy_protocol_MERFISH_lab.xml`; rename the copy you put on the microscope PC if so.
 
 ## What each tab does
 
@@ -61,11 +61,11 @@ The app keeps the linked fields consistent: `illumination/shutters`, `film/frame
 
 | Where | Presets |
 |---|---|
-| Top bar, **Preset** | The lab's 4 settings, plus the U2OS hyb `Dsk-405s1-750s6-650s6-405s6-U2OS` and `Dsk-405s1-750s6-650s6-560s6-U2OS` |
+| Top bar, **Preset** | The lab's 4 settings, plus the U2OS hyb run's `Dsk-405s1-750s6-650s6-405s6-U2OS` and `Dsk-405s1-750s6-650s6-560s6-U2OS` |
 | Tab 4, **Fluidics preset** | The lab's standard Kilroy protocols, and the U2OS hyb version with longer flow and wait times |
-| Tab 5, **Recipe preset** | the U2OS hyb U2OS recipe (1 imaging round + 14 hyb rounds, which offers to load his fluidics preset too), a 1 + 14 round template, and an image-once template. The templates use the settings currently on tab 2. |
+| Tab 5, **Recipe preset** | the U2OS hyb recipe (1 imaging round + 14 hyb rounds, which offers to load its fluidics preset too), a 1 + 14 round template, and an image-once template. The templates use the settings currently on tab 2. |
 
-Loading a settings preset and exporting gives files identical to the ones in `lab_files/hal/`. The one exception is the U2OS hyb out-of-date `film/filename` (`Epi-405s1-750s10-…`), which is replaced with the correct name. Dave sets the movie name itself, so the old value doesn't affect runs. The Kilroy presets are generated from the lab's valve wiring and protocol templates, and they reproduce the original files exactly. Presets never change files on disk until you save.
+Loading a settings preset and exporting gives files identical to the ones in `lab_files/hal/`. The one exception is the U2OS hyb settings' out-of-date `film/filename` (`Epi-405s1-750s10-…`), which is replaced with the correct name. Dave sets the movie name itself, so the old value doesn't affect runs. The Kilroy presets are generated from the lab's valve wiring and protocol templates, and they reproduce the original files exactly. Presets never change files on disk until you save.
 
 To add a preset, add an entry to `SETTINGS_PRESETS`, `KILROY_PRESETS` or `DAVE_PRESETS` in `app/merfish_setup_gui.py`.
 
@@ -83,7 +83,7 @@ To add a preset, add an entry to `SETTINGS_PRESETS`, `KILROY_PRESETS` or `DAVE_P
 python -m unittest discover tests -v
 ```
 
-The GUI tests open a real window, so they run only with `MERFISH_GUI_TESTS=1`. The test that compares the U2OS hyb fluidics preset with his original Kilroy file needs a local `reference/` folder (kept out of the repo by `.gitignore`), and is skipped without it.
+The GUI tests open a real window, so they run only with `MERFISH_GUI_TESTS=1`.
 
 ## macOS note
 
