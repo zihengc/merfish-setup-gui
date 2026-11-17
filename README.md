@@ -2,13 +2,26 @@
 
 A desktop app for preparing the files a [storm-control](https://github.com/ZhuangLab/storm-control) microscope needs for a MERFISH run: HAL shutters sequences, HAL settings, Kilroy fluidics protocols and Dave automation recipes. It uses only the Python standard library (tkinter), so it runs with any normal Python 3.9+ on Windows, macOS or Linux, with nothing to install.
 
+## Starting the app
+
+Double-click the launcher in the repository folder:
+
+- **macOS:** `MERFISH Setup.app`. It looks for a Python 3.9+ with Tk 8.6, trying a conda/mamba environment named `merfish` first, then other conda/mamba environments, python.org and Homebrew installs (see the [macOS note](#macos-note)). If none is found, it shows a message saying what to install.
+- **Windows:** `MERFISH Setup.bat`. It uses the Python launcher (`py`) or `python` on PATH, and starts the app without leaving a console window open. Install Python from [python.org](https://www.python.org/downloads/) if needed.
+
+Or start it from a terminal:
+
 ```
 python app/merfish_setup_gui.py
 ```
 
+Keep the launcher in the repository folder. It runs `app/merfish_setup_gui.py` relative to its own location. If macOS blocks the app because it came from a downloaded ZIP, right-click it and choose **Open** the first time. A `git clone` doesn't need this.
+
 ## Repository layout
 
 ```
+MERFISH Setup.app          double-click launcher (macOS)
+MERFISH Setup.bat          double-click launcher (Windows)
 app/
   merfish_setup_gui.py     the app (single file)
 lab_files/

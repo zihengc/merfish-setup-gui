@@ -1,0 +1,43 @@
+#!/bin/bash
+# Double-click launcher for the MERFISH Setup GUI on macOS.
+# Finds a Python 3.9+ whose Tk is 8.6 or newer (macOS's own /usr/bin/python3 has Tk 8.5,
+# which hangs) and runs app/merfish_setup_gui.py from the folder this .app sits in.
+
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+APP="$REPO/app/merfish_setup_gui.py"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+CHECK='import sys, tkinter; sys.exit(0 if sys.version_info >= (3, 9) and tkinter.TkVersion >= 8.6 else 1)'
+
+candidates=()
+# 1. a conda/mamba environment named "merfish", then any other environment
+ROOTS=("$MAMBA_ROOT_PREFIX" "$CONDA_PREFIX" "$HOME/.local/share/mamba" "$HOME/micromamba" "$HOME/miniforge3"
+       "$HOME/mambaforge" "$HOME/miniconda3" "$HOME/anaconda3" "/opt/homebrew/Caskroom/miniforge/base"
+       "/opt/miniconda3" "/opt/anaconda3")
+for r in "${ROOTS[@]}"; do [ -n "$r" ] && candidates+=("$r/envs/merfish/bin/python"); done
+for r in "${ROOTS[@]}"; do
+    [ -n "$r" ] || continue
+    for p in "$r"/envs/*/bin/python "$r/bin/python"; do candidates+=("$p"); done
+done
+# 2. python.org and Homebrew installs, then whatever is on PATH
+for v in 3.14 3.13 3.12 3.11 3.10 3.9; do
+    candidates+=("/Library/Frameworks/Python.framework/Versions/$v/bin/python3" "python$v")
+done
+candidates+=(python3 python)
+
+for py in "${candidates[@]}"; do
+    case "$py" in /*) [ -x "$py" ] || continue ;; *) command -v "$py" >/dev/null 2>&1 || continue ;; esac
+    if "$py" -c "$CHECK" >/dev/null 2>&1; then
+        LOG="${TMPDIR:-/tmp}/merfish_setup_gui.log"
+        "$py" "$APP" 2>"$LOG"
+        status=$?
+        if [ $status -ne 0 ]; then
+            msg="The app stopped with an error (Python: $py).\n\n$(tail -n 8 "$LOG" | sed 's/["\\]/ /g')"
+            osascript -e "display alert \"MERFISH Setup\" message \"$msg\" as critical" >/dev/null
+        fi
+        exit $status
+    fi
+done
+
+osascript -e 'display alert "MERFISH Setup" message "No Python 3.9+ with Tk 8.6 was found.\n\nInstall Python from python.org, or create a conda/mamba environment:\n\n    mamba create -n merfish python=3.12 tk\n\nthen double-click MERFISH Setup again." as critical' >/dev/null
+exit 1
